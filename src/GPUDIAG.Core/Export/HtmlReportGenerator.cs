@@ -23,7 +23,7 @@ public static class HtmlReportGenerator
         sb.AppendLine(GetScripts());
         sb.AppendLine("</head><body>");
         sb.AppendLine($"<h1>GPUDIAG Diagnostic Report</h1>");
-        sb.AppendLine($"<p class='meta'>Generated: {gen} | Scan type: {report.ScanType}</p>");
+        sb.AppendLine($"<p class='meta'>Generated: {gen} | Scan type: {report.ScanType} | GPUDIAG version: {HE(report.AppVersion)}</p>");
 
         // Executive summary
         if (report.Diagnosis != null)

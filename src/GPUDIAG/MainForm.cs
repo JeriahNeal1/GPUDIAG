@@ -106,7 +106,6 @@ public partial class MainForm : Form
         _btnExportJsonQuick.Enabled = false;
         _btnExportZipQuick.Enabled = false;
         _btnExportCsvQuick.Enabled = false;
-        _btnExportCsvQuick.Enabled = false;
 
         _progressBar = new ProgressBar
         {
@@ -535,7 +534,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            _lblChartWarning.Text = "⚠ Chart could not be loaded. Please install System.Data.SqlClient or switch to an alternate chart library.";
+            _lblChartWarning.Text = "⚠ Chart initialization failed; please check logs for details.";
             _lblChartWarning.Visible = true;
             if (_rtbLog != null)
                 AppendLog($"Chart initialization failed: {ex}", Color.Red);
@@ -665,8 +664,8 @@ public partial class MainForm : Form
                 UpdateDumpsTab();
 
                 // Storage
-            if (_settings.EnableWmiStorageCollector)
-            {
+                if (_settings.EnableWmiStorageCollector)
+                {
                     SetStatus("Collecting storage evidence...");
                     var storageCollector = new StorageCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
                     _report.Storage = await storageCollector.CollectAsync(_report.Events);
@@ -1293,8 +1292,10 @@ public partial class MainForm : Form
 
         BackColor = back;
         ForeColor = text;
-        if (_tabs != null)
-            _tabs.BackColor = panelBack;
+        if (_tabs == null)
+            return;
+
+        _tabs.BackColor = panelBack;
 
         foreach (TabPage tab in _tabs.TabPages)
         {
@@ -1340,16 +1341,16 @@ public partial class MainForm : Form
                     if (!lbl.Visible || lbl.BackColor == Color.Transparent)
                         lbl.ForeColor = text;
                     break;
-                case Panel p:
-                    p.BackColor = p.Dock == DockStyle.Top
-                        ? (isLight ? Color.FromArgb(196, 214, 240) : Color.FromArgb(15, 52, 96))
-                        : panelBack;
-                    break;
                 case TableLayoutPanel tlp:
                     tlp.BackColor = panelBack;
                     break;
                 case FlowLayoutPanel flp:
                     flp.BackColor = panelBack;
+                    break;
+                case Panel p:
+                    p.BackColor = p.Dock == DockStyle.Top
+                        ? (isLight ? Color.FromArgb(196, 214, 240) : Color.FromArgb(15, 52, 96))
+                        : panelBack;
                     break;
             }
 
@@ -1608,7 +1609,7 @@ public partial class MainForm : Form
         {
             if (_lblChartWarning != null)
             {
-                _lblChartWarning.Text = "⚠ Chart could not be loaded. Please install System.Data.SqlClient or switch to an alternate chart library.";
+                _lblChartWarning.Text = "⚠ Chart rendering failed; please check logs for details.";
                 _lblChartWarning.Visible = true;
             }
             AppendLog($"Chart render failed: {ex}", Color.Red);

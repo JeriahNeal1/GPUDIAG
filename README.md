@@ -134,37 +134,46 @@ GPUDIAG/
 | Storage | SMART health, disk events, primary vs. secondary assessment |
 | Crash Logs | WER entries and Java crash logs |
 | Diagnosis | Ranked hypotheses with confidence scores |
+| Drivers/Services | Repeated service crash/restart loop summary tied to hypotheses |
 | Export | Export HTML, JSON, or ZIP bundle |
 
 ### New UX & Settings Enhancements
 
-- **Interactive Event Timeline** now uses a sortable grid with category and date-range filters, plus a double-click details dialog showing correlated events.
+- **Interactive Event Timeline** now uses a sortable grid with category/date-range filters, quick category toggles (ServiceControl, KernelPower, WHEA, AppCrash, Storage), and a double-click details dialog showing correlated events.
+- Timeline category selection now persists across runs, and filtered timeline rows can be exported directly to CSV.
 - **Diagnosis tab chart** now displays normalized confidence bars that sum to 100%, including evidence counts (`+supporting`, `-counter`) per hypothesis.
+- Chart initialization/rendering is now guarded with error handling. If the chart dependency fails to load, GPUDIAG shows a red warning banner and logs the exception instead of crashing.
 - **Scan summary banner** appears after each scan with key totals and elapsed time, with distinct colors for Quick vs Deep scans.
 - **Admin warning banner** appears when not elevated and explains which data sources can be incomplete.
-- **Toolbar quick export** buttons for HTML, JSON, and ZIP are available directly from the top toolbar.
+- **Toolbar quick export** buttons for HTML, JSON, ZIP, and Timeline CSV are available directly from the top toolbar.
 - **Settings dialog** (`⚙ Settings`) allows configuring:
   - Event log look-back period (days)
   - Enable/disable WER collector
   - Enable/disable Java crash log collector
   - Enable/disable WMI storage collector
+  - Theme mode (dark/light), accent color, and reset-to-defaults
   - Settings persist to `%APPDATA%/GPUDIAG/config.json` and apply on next run.
 
 ### Diagnosis Engine
 
-The heuristic engine scores and ranks 5 hypotheses:
+The heuristic engine scores and ranks hypotheses with weighted priors:
 
 1. **NVIDIA dGPU / VRAM** — weighted by TDR events, NVIDIA driver errors, GPU crash dumps, LiveKernelEvents, Java nvgpucomp64.dll crashes, 0x19C WIN32K_POWER_WATCHDOG_TIMEOUT
 2. **PCIe / Motherboard / Power** — weighted by WHEA PCIe events, Kernel-Power events, 0x19C dumps
-3. **RAM / IMC / CPU** — weighted by memory diagnostic errors, WHEA memory events, random crash patterns
-4. **Storage / Filesystem** — weighted by SMART critical warnings, disk events, dirty filesystem (SFC failure alone is NOT sufficient)
-5. **Third-Party Driver** — weighted by repeated non-system faulting modules in dumps
+3. **CPU / Cache / Internal Bus** — weighted by CPU/cache WHEA patterns and machine-check style crashes
+4. **RAM / IMC / CPU** — weighted by memory diagnostic errors, WHEA memory events, random crash patterns
+5. **Storage / Filesystem** — weighted by SMART critical warnings, disk events, dirty filesystem (SFC failure alone is NOT sufficient)
+6. **Third-Party Driver** — weighted by repeated non-system faulting modules in dumps and recurrent service failures
+
+Additional weighting highlights:
+- Repeated **Service Control Manager** crash loops (for example `NVIDIA LocalSystem Container`) now boost GPU and third-party-driver hypotheses.
+- AppCrash module/process matching now supports GPU signals (e.g., `nvgpucomp64.dll`) and security-stack interference hints (e.g., `MsMpEng.exe`).
 
 ### Export
 
-- **HTML Report**: Human-readable, styled report with all findings
+- **HTML Report**: Human-readable, styled report with all findings, timeline table, service failure summary, scan timestamp, and app version
 - **JSON Report**: Machine-readable structured data
-- **ZIP Bundle**: HTML + JSON + event summaries + dump analysis outputs + Java crash headers
+- **ZIP Bundle**: HTML + JSON + event summaries + timeline.csv + dump analysis outputs + Java crash headers
 
 ## What Requires Admin
 
@@ -204,6 +213,7 @@ The app runs without admin but clearly notes which sources are limited.
 
 | Package | Version | Purpose |
 |---------|---------|---------|
+| `System.Data.SqlClient` | 4.8.6 | Required runtime dependency for WinForms DataVisualization Chart |
 | `System.Management` | 8.0.0 | WMI queries (GPU, RAM, disk info) |
 | `System.Text.Json` | 8.0.5 | JSON serialization |
 | `xunit` | 2.9.2 | Unit testing (tests project only) |
