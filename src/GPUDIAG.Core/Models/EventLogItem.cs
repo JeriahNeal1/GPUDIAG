@@ -39,6 +39,9 @@ public class TimelineEvent
     public string Summary { get; set; } = string.Empty;
     public EventSeverity Severity { get; set; }
     public string Source { get; set; } = string.Empty;
+    public EventCategory Category { get; set; }
+    public long EventId { get; set; }
+    public EventLogItem? AnchorEvent { get; set; }
     public List<EventLogItem> CorrelatedEvents { get; set; } = new();
     public bool IsAnchorEvent { get; set; }
 }

@@ -136,6 +136,20 @@ GPUDIAG/
 | Diagnosis | Ranked hypotheses with confidence scores |
 | Export | Export HTML, JSON, or ZIP bundle |
 
+### New UX & Settings Enhancements
+
+- **Interactive Event Timeline** now uses a sortable grid with category and date-range filters, plus a double-click details dialog showing correlated events.
+- **Diagnosis tab chart** now displays normalized confidence bars that sum to 100%, including evidence counts (`+supporting`, `-counter`) per hypothesis.
+- **Scan summary banner** appears after each scan with key totals and elapsed time, with distinct colors for Quick vs Deep scans.
+- **Admin warning banner** appears when not elevated and explains which data sources can be incomplete.
+- **Toolbar quick export** buttons for HTML, JSON, and ZIP are available directly from the top toolbar.
+- **Settings dialog** (`⚙ Settings`) allows configuring:
+  - Event log look-back period (days)
+  - Enable/disable WER collector
+  - Enable/disable Java crash log collector
+  - Enable/disable WMI storage collector
+  - Settings persist to `%APPDATA%/GPUDIAG/config.json` and apply on next run.
+
 ### Diagnosis Engine
 
 The heuristic engine scores and ranks 5 hypotheses:

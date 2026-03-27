@@ -256,6 +256,9 @@ public class EventLogCollector
                 Severity = anchor.Level <= 2 ? EventSeverity.Critical :
                            anchor.Level == 3 ? EventSeverity.Warning : EventSeverity.Error,
                 Source = anchor.ProviderName,
+                Category = anchor.Category,
+                EventId = anchor.EventId,
+                AnchorEvent = anchor,
                 IsAnchorEvent = true
             };
 
