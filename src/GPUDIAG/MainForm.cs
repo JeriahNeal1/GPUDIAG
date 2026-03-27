@@ -1,5 +1,6 @@
 using System.Windows.Forms;
 using System.Windows.Forms.DataVisualization.Charting;
+using GPUDIAG.Core.Analysis;
 using GPUDIAG.Configuration;
 using GPUDIAG.Collectors;
 using GPUDIAG.Core.Engine;
@@ -7,6 +8,8 @@ using GPUDIAG.Core.Export;
 using GPUDIAG.Core.Models;
 using GPUDIAG.Core.Parsers;
 using GPUDIAG.Dialogs;
+using System.Reflection;
+using System.Linq;
 
 namespace GPUDIAG;
 
@@ -22,13 +25,13 @@ public partial class MainForm : Form
     private TabPage _tabOverview = null!, _tabTimeline = null!, _tabDumps = null!,
                     _tabWhea = null!, _tabGraphics = null!, _tabMemory = null!,
                     _tabStorage = null!, _tabCrashLogs = null!, _tabDiagnosis = null!,
-                    _tabExport = null!;
+                    _tabServices = null!, _tabExport = null!;
 
     // Shared controls
     private Button _btnQuickScan = null!, _btnDeepScan = null!,
                    _btnSelectDumps = null!, _btnExport = null!,
                    _btnExportHtmlQuick = null!, _btnExportJsonQuick = null!,
-                   _btnExportZipQuick = null!, _btnSettings = null!;
+                   _btnExportZipQuick = null!, _btnExportCsvQuick = null!, _btnSettings = null!;
     private ProgressBar _progressBar = null!;
     private Label _lblStatus = null!;
     private RichTextBox _rtbLog = null!;
@@ -37,14 +40,19 @@ public partial class MainForm : Form
 
     // Tab content controls
     private RichTextBox _rtbOverview = null!, _rtbDumps = null!,
-                         _rtbWhea = null!, _rtbGraphics = null!, _rtbMemory = null!,
-                         _rtbStorage = null!, _rtbCrashLogs = null!, _rtbDiagnosis = null!;
+                          _rtbWhea = null!, _rtbGraphics = null!, _rtbMemory = null!,
+                          _rtbStorage = null!, _rtbCrashLogs = null!, _rtbDiagnosis = null!,
+                          _rtbServices = null!;
     private RichTextBox _rtbExportStatus = null!;
     private DataGridView _timelineGrid = null!;
     private ComboBox _cmbTimelineCategory = null!;
     private DateTimePicker _dtTimelineFrom = null!, _dtTimelineTo = null!;
     private Label _lblTimelineMeta = null!;
-    private Chart _diagnosisChart = null!;
+    private CheckBox _chkTimelineServiceControl = null!, _chkTimelineKernelPower = null!,
+                     _chkTimelineWhea = null!, _chkTimelineAppCrash = null!, _chkTimelineStorage = null!;
+    private Chart? _diagnosisChart;
+    private Label _lblChartWarning = null!;
+    private List<TimelineEvent> _filteredTimelineItems = new();
 
     private bool _isAdmin;
 
@@ -69,6 +77,7 @@ public partial class MainForm : Form
         BuildToolbar();
         BuildTabs();
         BuildStatusBar();
+        ApplyThemeFromSettings();
 
         ResumeLayout();
     }
@@ -91,10 +100,13 @@ public partial class MainForm : Form
         _btnExportHtmlQuick = CreateButton("HTML", System.Drawing.Color.FromArgb(0, 100, 80));
         _btnExportJsonQuick = CreateButton("JSON", System.Drawing.Color.FromArgb(0, 90, 110));
         _btnExportZipQuick = CreateButton("ZIP", System.Drawing.Color.FromArgb(100, 60, 0));
+        _btnExportCsvQuick = CreateButton("CSV", System.Drawing.Color.FromArgb(0, 90, 60));
         _btnExport.Enabled = false;
         _btnExportHtmlQuick.Enabled = false;
         _btnExportJsonQuick.Enabled = false;
         _btnExportZipQuick.Enabled = false;
+        _btnExportCsvQuick.Enabled = false;
+        _btnExportCsvQuick.Enabled = false;
 
         _progressBar = new ProgressBar
         {
@@ -126,7 +138,7 @@ public partial class MainForm : Form
         flow.Controls.AddRange(new Control[]
         {
             lblTitle, _btnQuickScan, _btnDeepScan, _btnSelectDumps, _btnSettings, _btnExport,
-            _btnExportHtmlQuick, _btnExportJsonQuick, _btnExportZipQuick, _progressBar
+            _btnExportHtmlQuick, _btnExportJsonQuick, _btnExportZipQuick, _btnExportCsvQuick, _progressBar
         });
 
         // Align progress bar vertically
@@ -170,6 +182,7 @@ public partial class MainForm : Form
         _btnExportHtmlQuick.Click += (_, _) => ExportFile("html");
         _btnExportJsonQuick.Click += (_, _) => ExportFile("json");
         _btnExportZipQuick.Click += (_, _) => ExportFile("zip");
+        _btnExportCsvQuick.Click += (_, _) => ExportFile("csv");
     }
 
     private void BuildTabs()
@@ -189,6 +202,7 @@ public partial class MainForm : Form
         _tabStorage = CreateTab("Storage");
         _tabCrashLogs = CreateTab("Crash Logs");
         _tabDiagnosis = CreateTab("Diagnosis");
+        _tabServices = CreateTab("Drivers/Services");
         _tabExport = CreateTab("Export");
 
         _rtbOverview = AddRtb(_tabOverview);
@@ -198,6 +212,7 @@ public partial class MainForm : Form
         _rtbMemory = AddRtb(_tabMemory);
         _rtbStorage = AddRtb(_tabStorage);
         _rtbCrashLogs = AddRtb(_tabCrashLogs);
+        _rtbServices = AddRtb(_tabServices);
 
         BuildTimelineTab();
         BuildDiagnosisTab();
@@ -210,13 +225,15 @@ public partial class MainForm : Form
         btnExportJson.Width = 180;
         var btnExportZip = CreateButton("Export ZIP Bundle", System.Drawing.Color.FromArgb(100, 60, 0));
         btnExportZip.Width = 180;
+        var btnExportCsv = CreateButton("Export Timeline CSV", System.Drawing.Color.FromArgb(0, 90, 60));
+        btnExportCsv.Width = 180;
         var exportFlow = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
             Height = 60,
             Padding = new Padding(5)
         };
-        exportFlow.Controls.AddRange(new Control[] { btnExportHtml, btnExportJson, btnExportZip });
+        exportFlow.Controls.AddRange(new Control[] { btnExportHtml, btnExportJson, btnExportZip, btnExportCsv });
         _rtbExportStatus = new RichTextBox
         {
             Dock = DockStyle.Fill,
@@ -232,12 +249,13 @@ public partial class MainForm : Form
         btnExportHtml.Click += (_, _) => ExportFile("html");
         btnExportJson.Click += (_, _) => ExportFile("json");
         btnExportZip.Click += (_, _) => ExportFile("zip");
+        btnExportCsv.Click += (_, _) => ExportFile("csv");
 
         _tabs.TabPages.AddRange(new[]
         {
             _tabOverview, _tabTimeline, _tabDumps, _tabWhea,
             _tabGraphics, _tabMemory, _tabStorage, _tabCrashLogs,
-            _tabDiagnosis, _tabExport
+            _tabDiagnosis, _tabServices, _tabExport
         });
 
         Controls.Add(_tabs);
@@ -320,7 +338,13 @@ public partial class MainForm : Form
         {
             "All", "Kernel-Power", "WHEA", "TDR/Display", "Graphics driver", "Disk/FileSystem", "Crash", "Other"
         });
-        _cmbTimelineCategory.SelectedIndex = 0;
+        var selectedCategory = _settings.TimelineCategory;
+        if (string.IsNullOrWhiteSpace(selectedCategory) ||
+            !_cmbTimelineCategory.Items.Cast<object>().Any(x => string.Equals(x.ToString(), selectedCategory, StringComparison.OrdinalIgnoreCase)))
+        {
+            selectedCategory = "All";
+        }
+        _cmbTimelineCategory.SelectedItem = selectedCategory;
         filterPanel.Controls.Add(_cmbTimelineCategory);
 
         filterPanel.Controls.Add(CreateFilterLabel("From"));
@@ -346,6 +370,52 @@ public partial class MainForm : Form
             ForeColor = Color.White
         };
         filterPanel.Controls.Add(_dtTimelineTo);
+
+        _chkTimelineServiceControl = new CheckBox
+        {
+            Text = "ServiceControl",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Margin = new Padding(16, 8, 0, 0)
+        };
+        _chkTimelineKernelPower = new CheckBox
+        {
+            Text = "KernelPower",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Margin = new Padding(8, 8, 0, 0)
+        };
+        _chkTimelineWhea = new CheckBox
+        {
+            Text = "WHEA",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Margin = new Padding(8, 8, 0, 0)
+        };
+        _chkTimelineAppCrash = new CheckBox
+        {
+            Text = "AppCrash",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Margin = new Padding(8, 8, 0, 0)
+        };
+        _chkTimelineStorage = new CheckBox
+        {
+            Text = "Storage",
+            Checked = true,
+            AutoSize = true,
+            ForeColor = Color.FromArgb(220, 220, 220),
+            Margin = new Padding(8, 8, 0, 0)
+        };
+        filterPanel.Controls.Add(_chkTimelineServiceControl);
+        filterPanel.Controls.Add(_chkTimelineKernelPower);
+        filterPanel.Controls.Add(_chkTimelineWhea);
+        filterPanel.Controls.Add(_chkTimelineAppCrash);
+        filterPanel.Controls.Add(_chkTimelineStorage);
 
         _lblTimelineMeta = new Label
         {
@@ -389,6 +459,11 @@ public partial class MainForm : Form
         _cmbTimelineCategory.SelectedIndexChanged += (_, _) => RefreshTimelineGrid();
         _dtTimelineFrom.ValueChanged += (_, _) => RefreshTimelineGrid();
         _dtTimelineTo.ValueChanged += (_, _) => RefreshTimelineGrid();
+        _chkTimelineServiceControl.CheckedChanged += (_, _) => RefreshTimelineGrid();
+        _chkTimelineKernelPower.CheckedChanged += (_, _) => RefreshTimelineGrid();
+        _chkTimelineWhea.CheckedChanged += (_, _) => RefreshTimelineGrid();
+        _chkTimelineAppCrash.CheckedChanged += (_, _) => RefreshTimelineGrid();
+        _chkTimelineStorage.CheckedChanged += (_, _) => RefreshTimelineGrid();
         _timelineGrid.CellDoubleClick += TimelineGridOnCellDoubleClick;
 
         root.Controls.Add(filterPanel, 0, 0);
@@ -414,36 +489,59 @@ public partial class MainForm : Form
             BackColor = Color.FromArgb(22, 33, 62)
         };
 
-        _diagnosisChart = new Chart
+        _lblChartWarning = new Label
         {
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(22, 33, 62)
+            Dock = DockStyle.Top,
+            Height = 34,
+            Visible = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = Color.FromArgb(140, 35, 35),
+            ForeColor = Color.FromArgb(255, 230, 230),
+            Padding = new Padding(10, 0, 0, 0),
+            Font = new Font("Consolas", 9f, FontStyle.Bold)
         };
 
-        var area = new ChartArea("DiagnosisArea")
+        try
         {
-            BackColor = Color.FromArgb(18, 27, 50)
-        };
-        area.AxisX.MajorGrid.Enabled = false;
-        area.AxisX.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
-        area.AxisX.Interval = 1;
-        area.AxisY.Maximum = 100;
-        area.AxisY.Minimum = 0;
-        area.AxisY.Title = "Confidence (%)";
-        area.AxisY.TitleForeColor = Color.FromArgb(180, 210, 245);
-        area.AxisY.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
-        area.AxisY.MajorGrid.LineColor = Color.FromArgb(45, 62, 94);
-        _diagnosisChart.ChartAreas.Add(area);
+            _diagnosisChart = new Chart
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(22, 33, 62)
+            };
+            var area = new ChartArea("DiagnosisArea")
+            {
+                BackColor = Color.FromArgb(18, 27, 50)
+            };
+            area.AxisX.MajorGrid.Enabled = false;
+            area.AxisX.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
+            area.AxisX.Interval = 1;
+            area.AxisY.Maximum = 100;
+            area.AxisY.Minimum = 0;
+            area.AxisY.Title = "Confidence (%)";
+            area.AxisY.TitleForeColor = Color.FromArgb(180, 210, 245);
+            area.AxisY.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
+            area.AxisY.MajorGrid.LineColor = Color.FromArgb(45, 62, 94);
+            _diagnosisChart.ChartAreas.Add(area);
 
-        var series = new Series("Hypotheses")
+            var series = new Series("Hypotheses")
+            {
+                ChartType = SeriesChartType.Bar,
+                IsValueShownAsLabel = true,
+                LabelForeColor = Color.White,
+                Font = new Font("Consolas", 8.5f, FontStyle.Bold)
+            };
+            _diagnosisChart.Series.Add(series);
+            _diagnosisChart.Legends.Clear();
+        }
+        catch (Exception ex)
         {
-            ChartType = SeriesChartType.Bar,
-            IsValueShownAsLabel = true,
-            LabelForeColor = Color.White,
-            Font = new Font("Consolas", 8.5f, FontStyle.Bold)
-        };
-        _diagnosisChart.Series.Add(series);
-        _diagnosisChart.Legends.Clear();
+            _lblChartWarning.Text = "⚠ Chart could not be loaded. Please install System.Data.SqlClient or switch to an alternate chart library.";
+            _lblChartWarning.Visible = true;
+            if (_rtbLog != null)
+                AppendLog($"Chart initialization failed: {ex}", Color.Red);
+            else
+                System.Diagnostics.Debug.WriteLine($"Chart initialization failed: {ex}");
+        }
 
         _rtbDiagnosis = new RichTextBox
         {
@@ -456,7 +554,9 @@ public partial class MainForm : Form
             WordWrap = false
         };
 
-        root.Panel1.Controls.Add(_diagnosisChart);
+        if (_diagnosisChart != null)
+            root.Panel1.Controls.Add(_diagnosisChart);
+        root.Panel1.Controls.Add(_lblChartWarning);
         root.Panel2.Controls.Add(_rtbDiagnosis);
         _tabDiagnosis.Controls.Add(root);
     }
@@ -503,7 +603,11 @@ public partial class MainForm : Form
         SetStatus($"Running {scanType} scan...");
         if (_lblScanBanner != null) _lblScanBanner.Visible = false;
 
-        _report = new DiagnosticReport { ScanType = scanType };
+        _report = new DiagnosticReport
+        {
+            ScanType = scanType,
+            AppVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0"
+        };
 
         try
         {
@@ -561,8 +665,8 @@ public partial class MainForm : Form
                 UpdateDumpsTab();
 
                 // Storage
-                if (_settings.EnableWmiStorageCollector)
-                {
+            if (_settings.EnableWmiStorageCollector)
+            {
                     SetStatus("Collecting storage evidence...");
                     var storageCollector = new StorageCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
                     _report.Storage = await storageCollector.CollectAsync(_report.Events);
@@ -596,11 +700,14 @@ public partial class MainForm : Form
             var engine = new DiagnosisEngine(_report);
             _report.Diagnosis = engine.Analyze();
             UpdateDiagnosisTab();
+            UpdateOverviewTab();
+            UpdateWarningBadges();
 
             _btnExport.Enabled = true;
             _btnExportHtmlQuick.Enabled = true;
             _btnExportJsonQuick.Enabled = true;
             _btnExportZipQuick.Enabled = true;
+            _btnExportCsvQuick.Enabled = true;
 
             var elapsed = DateTime.UtcNow - started;
             var statusSummary = $"{scanType} scan complete. {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA, {_report.CrashDumps.Count} dumps analyzed.";
@@ -608,12 +715,15 @@ public partial class MainForm : Form
             if (_lblScanBanner != null)
             {
                 _lblScanBanner.Text = $"Scan complete: {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA errors, {_report.CrashDumps.Count} dumps analyzed in {elapsed:hh\\:mm\\:ss}";
+                _lblScanBanner.Text += $" | GPUDIAG v{_report.AppVersion} | {_report.GeneratedAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
                 _lblScanBanner.BackColor = scanType.Equals("Deep", StringComparison.OrdinalIgnoreCase)
                     ? Color.FromArgb(0, 68, 110)
                     : Color.FromArgb(0, 100, 75);
                 _lblScanBanner.Visible = true;
             }
             AppendLog($"✓ {scanType} scan complete.", System.Drawing.Color.LimeGreen);
+            _settings.TimelineCategory = _cmbTimelineCategory?.SelectedItem?.ToString() ?? "All";
+            AppSettingsManager.Save(_settings);
 
             // Switch to Diagnosis tab
             _tabs.SelectedTab = _tabDiagnosis;
@@ -688,6 +798,16 @@ public partial class MainForm : Form
                 sb.AppendLine();
             }
 
+            if (_report.CollectionErrors.Any())
+            {
+                sb.AppendLine("═══ ERRORS ENCOUNTERED DURING COLLECTION ═══");
+                foreach (var err in _report.CollectionErrors.Distinct().Take(15))
+                    sb.AppendLine($"  ⚠ {err}");
+                if (_report.CollectionErrors.Count > 15)
+                    sb.AppendLine($"  ...and {_report.CollectionErrors.Count - 15} more.");
+                sb.AppendLine();
+            }
+
             _rtbOverview.Text = sb.ToString();
         });
     }
@@ -730,11 +850,29 @@ public partial class MainForm : Form
 
             var tdrEvts = _report.Events.Where(e => e.Category == EventCategory.TdrDisplay).ToList();
             var nvEvts = _report.Events.Where(e => e.Category == EventCategory.NvidiaDriver).ToList();
+            var serviceSummaries = ServiceFailureAnalyzer.Summarize(_report.Events, minimumCount: 1);
+            var gpuServiceSummaries = serviceSummaries.Where(x => x.IsGpuRelated).ToList();
 
             gSb.AppendLine($"TDR / Display Reset events: {tdrEvts.Count}");
             gSb.AppendLine($"NVIDIA driver events:        {nvEvts.Count}");
             gSb.AppendLine($"WHEA PCIe/GPU events:        {_report.WheaPcieCount}");
             gSb.AppendLine();
+
+            if (gpuServiceSummaries.Any())
+            {
+                gSb.AppendLine("Driver/Service failures (GPU-related):");
+                foreach (var svc in gpuServiceSummaries.Take(8))
+                {
+                    gSb.AppendLine($"  ⚠ {svc.ServiceName} terminated/restarted {svc.Count} time(s) " +
+                                   $"({svc.FirstOccurrenceUtc.ToLocalTime():MM-dd HH:mm} → {svc.LastOccurrenceUtc.ToLocalTime():MM-dd HH:mm})");
+                }
+                gSb.AppendLine();
+            }
+            else
+            {
+                gSb.AppendLine("No repeated GPU-related service failures detected.");
+                gSb.AppendLine();
+            }
 
             foreach (var e in tdrEvts.Concat(nvEvts).OrderByDescending(x => x.TimeCreated).Take(30))
             {
@@ -744,6 +882,32 @@ public partial class MainForm : Form
             }
 
             _rtbGraphics.Text = gSb.ToString();
+
+            // Drivers/services tab
+            var sSb = new System.Text.StringBuilder();
+            sSb.AppendLine("═══ DRIVER / SERVICE FAILURE SUMMARY ═══");
+            sSb.AppendLine();
+            var repeatedFailures = ServiceFailureAnalyzer.Summarize(_report.Events, minimumCount: 3);
+            if (!repeatedFailures.Any())
+            {
+                sSb.AppendLine("No services exceeded failure threshold (>3) in selected look-back window.");
+            }
+            else
+            {
+                sSb.AppendLine("Services with frequent failures/restarts:");
+                sSb.AppendLine();
+                foreach (var svc in repeatedFailures)
+                {
+                    sSb.AppendLine($"{(svc.IsGpuRelated ? "⚠ " : "  ")}{svc.ServiceName}");
+                    sSb.AppendLine($"    Count: {svc.Count}");
+                    sSb.AppendLine($"    First: {svc.FirstOccurrenceUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+                    sSb.AppendLine($"    Last:  {svc.LastOccurrenceUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
+                    if (svc.IsGpuRelated)
+                        sSb.AppendLine("    Link: Supports NVIDIA dGPU/VRAM hypothesis.");
+                    sSb.AppendLine();
+                }
+            }
+            _rtbServices.Text = sSb.ToString();
         });
     }
 
@@ -825,6 +989,12 @@ public partial class MainForm : Form
                 sb.AppendLine($"Disk/Filesystem events ({storage.DiskEvents.Count}):");
                 foreach (var e in storage.DiskEvents.OrderByDescending(x => x.TimeCreated).Take(20))
                     sb.AppendLine($"  {e.TimeCreated:yyyy-MM-dd HH:mm:ss} [{e.Category}] {e.ProviderName} ID={e.EventId}: {e.Message?.Split('\n').FirstOrDefault()?.Trim()}");
+                sb.AppendLine();
+
+                var dumpInitFailures = storage.DiskEvents.Count(e => e.EventId == 46 && e.ProviderName.Contains("volmgr", StringComparison.OrdinalIgnoreCase));
+                var dumpInitSuccess = storage.DiskEvents.Count(e => e.EventId == 162 && e.ProviderName.Contains("volmgr", StringComparison.OrdinalIgnoreCase));
+                sb.AppendLine($"Crash dump initialization failures (Event 46): {dumpInitFailures}");
+                sb.AppendLine($"Crash dump initialization successes (Event 162): {dumpInitSuccess}");
             }
 
             _rtbStorage.Text = sb.ToString();
@@ -993,14 +1163,39 @@ public partial class MainForm : Form
         menu.Items.Add("Export HTML", null, (_, _) => ExportFile("html"));
         menu.Items.Add("Export JSON", null, (_, _) => ExportFile("json"));
         menu.Items.Add("Export ZIP Bundle", null, (_, _) => ExportFile("zip"));
+        menu.Items.Add("Export Timeline CSV", null, (_, _) => ExportFile("csv"));
         menu.Show(_btnExport, new Point(0, _btnExport.Height));
     }
 
     private void ExportFile(string format)
     {
-        if (_report.Diagnosis == null)
+        if (_report.Diagnosis == null && !string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase))
         {
             MessageBox.Show("Please run a scan first.", "No data", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase))
+        {
+            using var saveDialog = new SaveFileDialog
+            {
+                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                FileName = $"GPUDIAG_Timeline_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+                Title = "Export filtered timeline to CSV"
+            };
+            if (saveDialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                File.WriteAllText(saveDialog.FileName, BuildTimelineCsv(), System.Text.Encoding.UTF8);
+                AppendLog($"✓ Timeline CSV exported: {saveDialog.FileName}", System.Drawing.Color.LimeGreen);
+                _rtbExportStatus.AppendText($"Exported: {saveDialog.FileName}\r\n");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Export failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
             return;
         }
 
@@ -1075,15 +1270,104 @@ public partial class MainForm : Form
             return;
 
         _settings = dlg.Settings.Clone();
+        _settings.TimelineCategory = _cmbTimelineCategory?.SelectedItem?.ToString() ?? _settings.TimelineCategory;
         AppSettingsManager.Save(_settings);
         if (_dtTimelineFrom != null && _dtTimelineTo != null)
         {
             _dtTimelineFrom.Value = DateTime.Now.AddDays(-_settings.EventLookbackDays);
             _dtTimelineTo.Value = DateTime.Now;
         }
+        ApplyThemeFromSettings();
         AppendLog($"Settings saved. Look-back={_settings.EventLookbackDays} days, WER={_settings.EnableWerCollector}, Java={_settings.EnableJavaCollector}, WMI storage={_settings.EnableWmiStorageCollector}.", Color.Cyan);
         UpdateOverviewTab();
         RefreshTimelineGrid();
+    }
+
+    private void ApplyThemeFromSettings()
+    {
+        var isLight = string.Equals(_settings.ThemeMode, "Light", StringComparison.OrdinalIgnoreCase);
+        var back = isLight ? Color.FromArgb(243, 246, 252) : Color.FromArgb(26, 26, 46);
+        var panelBack = isLight ? Color.FromArgb(225, 233, 246) : Color.FromArgb(22, 33, 62);
+        var text = isLight ? Color.FromArgb(25, 32, 45) : Color.FromArgb(224, 224, 224);
+        var accent = ParseAccentColor(_settings.AccentColorHex);
+
+        BackColor = back;
+        ForeColor = text;
+        if (_tabs != null)
+            _tabs.BackColor = panelBack;
+
+        foreach (TabPage tab in _tabs.TabPages)
+        {
+            tab.BackColor = panelBack;
+            tab.ForeColor = text;
+        }
+
+        ApplyThemeToControlTree(this, isLight, back, panelBack, text, accent);
+        if (_lblScanBanner != null)
+            _lblScanBanner.ForeColor = Color.White;
+    }
+
+    private static void ApplyThemeToControlTree(Control root, bool isLight, Color back, Color panelBack, Color text, Color accent)
+    {
+        foreach (Control c in root.Controls)
+        {
+            switch (c)
+            {
+                case RichTextBox rtb:
+                    rtb.BackColor = panelBack;
+                    rtb.ForeColor = text;
+                    break;
+                case DataGridView dgv:
+                    dgv.BackgroundColor = panelBack;
+                    dgv.DefaultCellStyle.BackColor = panelBack;
+                    dgv.DefaultCellStyle.ForeColor = text;
+                    dgv.ColumnHeadersDefaultCellStyle.BackColor = isLight ? Color.FromArgb(196, 214, 240) : Color.FromArgb(15, 52, 96);
+                    dgv.ColumnHeadersDefaultCellStyle.ForeColor = accent;
+                    dgv.GridColor = isLight ? Color.FromArgb(190, 200, 220) : Color.FromArgb(42, 58, 92);
+                    break;
+                case Button btn:
+                    btn.ForeColor = Color.White;
+                    break;
+                case ComboBox cb:
+                    cb.BackColor = isLight ? Color.White : Color.FromArgb(15, 52, 96);
+                    cb.ForeColor = isLight ? Color.Black : Color.White;
+                    break;
+                case DateTimePicker dt:
+                    dt.BackColor = isLight ? Color.White : Color.FromArgb(15, 52, 96);
+                    dt.ForeColor = isLight ? Color.Black : Color.White;
+                    break;
+                case Label lbl:
+                    if (!lbl.Visible || lbl.BackColor == Color.Transparent)
+                        lbl.ForeColor = text;
+                    break;
+                case Panel p:
+                    p.BackColor = p.Dock == DockStyle.Top
+                        ? (isLight ? Color.FromArgb(196, 214, 240) : Color.FromArgb(15, 52, 96))
+                        : panelBack;
+                    break;
+                case TableLayoutPanel tlp:
+                    tlp.BackColor = panelBack;
+                    break;
+                case FlowLayoutPanel flp:
+                    flp.BackColor = panelBack;
+                    break;
+            }
+
+            if (c.HasChildren)
+                ApplyThemeToControlTree(c, isLight, back, panelBack, text, accent);
+        }
+    }
+
+    private static Color ParseAccentColor(string? hex)
+    {
+        try
+        {
+            return ColorTranslator.FromHtml(string.IsNullOrWhiteSpace(hex) ? "#00D4FF" : hex);
+        }
+        catch
+        {
+            return ColorTranslator.FromHtml("#00D4FF");
+        }
     }
 
     private static IEnumerable<string> GetJavaSearchFolders()
@@ -1158,8 +1442,12 @@ public partial class MainForm : Form
 
         var filtered = rebuiltTimeline
             .Where(t => MatchesTimelineCategory(t, selectedCategory))
+            .Where(MatchesQuickCategoryToggles)
             .OrderByDescending(t => t.Timestamp)
             .ToList();
+        _filteredTimelineItems = filtered;
+        _settings.TimelineCategory = selectedCategory;
+        AppSettingsManager.Save(_settings);
 
         foreach (var timelineItem in filtered)
         {
@@ -1175,6 +1463,36 @@ public partial class MainForm : Form
 
         if (_lblTimelineMeta != null)
             _lblTimelineMeta.Text = $"Showing {filtered.Count} / {rebuiltTimeline.Count} anchor events from {sourceEvents.Count} total events in selected window.";
+    }
+
+    private bool MatchesQuickCategoryToggles(TimelineEvent timeline)
+    {
+        if (_chkTimelineServiceControl != null &&
+            !_chkTimelineServiceControl.Checked &&
+            timeline.Category == EventCategory.ServiceControl)
+            return false;
+
+        if (_chkTimelineKernelPower != null &&
+            !_chkTimelineKernelPower.Checked &&
+            timeline.Category == EventCategory.KernelPower)
+            return false;
+
+        if (_chkTimelineWhea != null &&
+            !_chkTimelineWhea.Checked &&
+            timeline.Category == EventCategory.Whea)
+            return false;
+
+        if (_chkTimelineAppCrash != null &&
+            !_chkTimelineAppCrash.Checked &&
+            timeline.Category == EventCategory.AppCrash)
+            return false;
+
+        if (_chkTimelineStorage != null &&
+            !_chkTimelineStorage.Checked &&
+            timeline.Category is EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage)
+            return false;
+
+        return true;
     }
 
     private static string NormalizeSummary(string? text, int maxLength)
@@ -1204,6 +1522,44 @@ public partial class MainForm : Form
         return string.Equals(GetTimelineCategoryLabel(timeline.Category), selectedCategory, StringComparison.OrdinalIgnoreCase);
     }
 
+    private string BuildTimelineCsv()
+    {
+        if (_filteredTimelineItems.Count == 0)
+            RefreshTimelineGrid();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("DateTime,Provider,EventId,Severity,Category,Summary");
+        foreach (var t in _filteredTimelineItems)
+        {
+            sb.AppendLine(string.Join(",",
+                Csv(t.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")),
+                Csv(t.Source),
+                Csv(t.EventId.ToString()),
+                Csv(t.Severity.ToString()),
+                Csv(GetTimelineCategoryLabel(t.Category)),
+                Csv(NormalizeSummary(t.Summary, 400))));
+        }
+        return sb.ToString();
+    }
+
+    private static string Csv(string value)
+    {
+        if (value.Contains('"'))
+            value = value.Replace("\"", "\"\"");
+        return $"\"{value}\"";
+    }
+
+    private void UpdateWarningBadges()
+    {
+        var wheaWarn = _report.WheaEvents.Any();
+        var serviceWarn = ServiceFailureAnalyzer.Summarize(_report.Events, minimumCount: 3).Any();
+        var memoryWarn = _report.Memory?.LastDiagResult?.ErrorsFound == true;
+
+        _tabWhea.Text = wheaWarn ? "⚠ WHEA" : "WHEA";
+        _tabServices.Text = serviceWarn ? "⚠ Drivers/Services" : "Drivers/Services";
+        _tabMemory.Text = memoryWarn ? "⚠ Memory" : "Memory";
+    }
+
     private void TimelineGridOnCellDoubleClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0) return;
@@ -1222,26 +1578,40 @@ public partial class MainForm : Form
 
     private void UpdateDiagnosisChart(DiagnosisResult diag)
     {
-        if (_diagnosisChart.Series.Count == 0)
-            return;
-
-        var series = _diagnosisChart.Series[0];
-        series.Points.Clear();
-        if (!diag.TopHypotheses.Any())
-            return;
-
-        foreach (var h in diag.TopHypotheses.Take(5))
+        try
         {
-            var label = h.Name.Length > 28 ? h.Name[..28] + "…" : h.Name;
-            var pointIndex = series.Points.AddXY(label, Math.Round(h.ConfidenceScore * 100, 1));
-            var point = series.Points[pointIndex];
-            point.Color = h.ConfidenceScore >= 0.5
-                ? Color.FromArgb(220, 68, 68)
-                : h.ConfidenceScore >= 0.25
-                    ? Color.FromArgb(255, 170, 0)
-                    : Color.FromArgb(68, 170, 68);
-            point.Label = $"{h.ConfidenceScore:P0} (+{h.SupportingEvidence.Count}, -{h.CounterEvidence.Count})";
-            point.AxisLabel = label;
+            if (_diagnosisChart == null || _diagnosisChart.Series.Count == 0)
+                return;
+
+            var series = _diagnosisChart.Series[0];
+            series.Points.Clear();
+            if (!diag.TopHypotheses.Any())
+                return;
+
+            foreach (var h in diag.TopHypotheses.Take(5))
+            {
+                var label = h.Name.Length > 28 ? h.Name[..28] + "…" : h.Name;
+                var pointIndex = series.Points.AddXY(label, Math.Round(h.ConfidenceScore * 100, 1));
+                var point = series.Points[pointIndex];
+                point.Color = h.ConfidenceScore >= 0.5
+                    ? Color.FromArgb(220, 68, 68)
+                    : h.ConfidenceScore >= 0.25
+                        ? Color.FromArgb(255, 170, 0)
+                        : Color.FromArgb(68, 170, 68);
+                point.Label = $"{h.ConfidenceScore:P0} (+{h.SupportingEvidence.Count}, -{h.CounterEvidence.Count})";
+                point.AxisLabel = label;
+            }
+            if (_lblChartWarning != null)
+                _lblChartWarning.Visible = false;
+        }
+        catch (Exception ex)
+        {
+            if (_lblChartWarning != null)
+            {
+                _lblChartWarning.Text = "⚠ Chart could not be loaded. Please install System.Data.SqlClient or switch to an alternate chart library.";
+                _lblChartWarning.Visible = true;
+            }
+            AppendLog($"Chart render failed: {ex}", Color.Red);
         }
     }
 

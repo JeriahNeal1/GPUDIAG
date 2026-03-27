@@ -24,6 +24,15 @@ public static class AppSettingsManager
                 return new AppSettings();
 
             settings.EventLookbackDays = Math.Clamp(settings.EventLookbackDays, 1, 365);
+            settings.TimelineCategory = string.IsNullOrWhiteSpace(settings.TimelineCategory)
+                ? "All"
+                : settings.TimelineCategory;
+            settings.ThemeMode = string.IsNullOrWhiteSpace(settings.ThemeMode)
+                ? "Dark"
+                : settings.ThemeMode;
+            settings.AccentColorHex = string.IsNullOrWhiteSpace(settings.AccentColorHex)
+                ? "#00D4FF"
+                : settings.AccentColorHex;
             return settings;
         }
         catch

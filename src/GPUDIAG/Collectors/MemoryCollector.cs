@@ -62,12 +62,15 @@ public class MemoryCollector
         if (memEvents.Any())
         {
             var latest = memEvents.OrderByDescending(e => e.TimeCreated).First();
+            var hasError = latest.Message?.Contains("hardware problems were detected", StringComparison.OrdinalIgnoreCase) == true ||
+                           latest.Message?.Contains("memory errors", StringComparison.OrdinalIgnoreCase) == true ||
+                           (latest.Message?.Contains("error", StringComparison.OrdinalIgnoreCase) == true &&
+                            !latest.Message.Contains("no error", StringComparison.OrdinalIgnoreCase));
             info.LastDiagResult = new MemoryDiagResult
             {
                 RunTime = latest.TimeCreated,
                 ResultText = latest.Message?.Split('\n').FirstOrDefault()?.Trim() ?? "",
-                ErrorsFound = latest.Message?.Contains("error", StringComparison.OrdinalIgnoreCase) == true &&
-                              !latest.Message.Contains("no error", StringComparison.OrdinalIgnoreCase),
+                ErrorsFound = hasError,
                 Details = latest.Message ?? ""
             };
         }

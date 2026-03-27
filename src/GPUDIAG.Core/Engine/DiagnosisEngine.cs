@@ -1,4 +1,5 @@
 using GPUDIAG.Core.Models;
+using GPUDIAG.Core.Analysis;
 
 namespace GPUDIAG.Core.Engine;
 
@@ -24,6 +25,7 @@ public class DiagnosisEngine
         {
             [HypothesisType.NvidiaGpuVram] = BasePrior,
             [HypothesisType.PcieMotherboardPower] = BasePrior,
+            [HypothesisType.CpuCacheSubsystem] = BasePrior,
             [HypothesisType.RamImcCpu] = BasePrior,
             [HypothesisType.StorageFilesystem] = BasePrior,
             [HypothesisType.ThirdPartyDriver] = BasePrior
@@ -35,6 +37,7 @@ public class DiagnosisEngine
 
         ScoreNvidiaGpu(scores, evidence);
         ScorePcie(scores, evidence);
+        ScoreCpuCache(scores, evidence);
         ScoreRam(scores, evidence);
         ScoreStorage(scores, evidence);
         ScoreThirdPartyDriver(scores, evidence);
@@ -137,6 +140,28 @@ public class DiagnosisEngine
             forList.Add($"{javaGpu} Java crash log(s) with native GPU code (nvgpucomp64.dll or similar).");
         }
 
+        // AppCrash events with GPU-related modules/processes
+        int appCrashGpu = _report.Events.Count(e =>
+            e.Category == EventCategory.AppCrash &&
+            (e.Message.Contains("nvgpucomp", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("nvlddmkm", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("nvwgf2umx", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("d3d", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("dxgi", StringComparison.OrdinalIgnoreCase)));
+        if (appCrashGpu > 0)
+        {
+            scores[key] += 2.5 * Math.Min(appCrashGpu, 4);
+            forList.Add($"{appCrashGpu} AppCrash event(s) reference GPU/display modules (e.g., nvgpucomp64.dll).");
+        }
+
+        // Repeated GPU-related service failures (e.g., NVIDIA LocalSystem Container)
+        int nvidiaServiceFailures = RepeatedServiceFailureCount("NVIDIA LocalSystem Container");
+        if (nvidiaServiceFailures > 0)
+        {
+            scores[key] += 3.0 * Math.Min(nvidiaServiceFailures, 8);
+            forList.Add($"NVIDIA LocalSystem Container terminated/restarted {nvidiaServiceFailures} time(s).");
+        }
+
         // WER AppCrash with STATUS_ACCESS_VIOLATION in graphics process
         int werGraphics = _report.WerEntries.Count(w => w.IsGraphicsRelated);
         if (werGraphics > 0)
@@ -228,6 +253,20 @@ public class DiagnosisEngine
             forList.Add($"{wheaMem} WHEA event(s) implicate memory subsystem.");
         }
 
+        // WHEA CPU/cache events should influence RAM/IMC/CPU bucket, not PCIe.
+        var wheaCpuEvents = _report.WheaEvents
+            .Where(w => w.ClassifiedSubsystem == WheaSubsystem.CpuCache ||
+                        (w.EventId == 19 && (
+                            w.Message.Contains("processor", StringComparison.OrdinalIgnoreCase) ||
+                            w.Message.Contains("cache", StringComparison.OrdinalIgnoreCase))))
+            .ToList();
+        int wheaCpu = wheaCpuEvents.Count;
+        if (wheaCpu > 0)
+        {
+            scores[key] += 4.0 * Math.Min(WeightedWheaCount(wheaCpuEvents), 4.5);
+            forList.Add($"{wheaCpu} WHEA event(s) implicate CPU/cache subsystem.");
+        }
+
         // Random access violations across unrelated modules (pattern of generalized corruption)
         bool randomPattern = _report.Memory?.RandomCrashPatternAcrossModules == true;
         if (randomPattern)
@@ -253,6 +292,38 @@ public class DiagnosisEngine
                          _report.Events.Any(e => e.Category == EventCategory.TdrDisplay);
         if (strongGpu && wheaMem == 0 && _report.Memory?.LastDiagResult?.ErrorsFound != true)
             against.Add("Crash pattern is more consistent with graphics-path failure than generalized RAM corruption.");
+    }
+
+    private void ScoreCpuCache(
+        Dictionary<HypothesisType, double> scores,
+        Dictionary<HypothesisType, (List<string> For, List<string> Against)> evidence)
+    {
+        var key = HypothesisType.CpuCacheSubsystem;
+        var (forList, against) = evidence[key];
+
+        var cpuWheaEvents = _report.WheaEvents
+            .Where(w => w.ClassifiedSubsystem == WheaSubsystem.CpuCache ||
+                        (w.EventId == 19 && (
+                            w.Message.Contains("processor", StringComparison.OrdinalIgnoreCase) ||
+                            w.Message.Contains("cache", StringComparison.OrdinalIgnoreCase))))
+            .ToList();
+        if (cpuWheaEvents.Count > 0)
+        {
+            scores[key] += 5.0 * Math.Min(WeightedWheaCount(cpuWheaEvents), 5.0);
+            forList.Add($"{cpuWheaEvents.Count} WHEA event(s) indicate CPU/cache/internal-bus instability.");
+        }
+
+        var cacheDumps = _report.CrashDumps.Count(d =>
+            d.BugCheckCode.Contains("CACHE", StringComparison.OrdinalIgnoreCase) ||
+            d.BugCheckCode.Contains("MACHINE_CHECK", StringComparison.OrdinalIgnoreCase));
+        if (cacheDumps > 0)
+        {
+            scores[key] += 2.0 * Math.Min(cacheDumps, 2);
+            forList.Add($"{cacheDumps} crash dump(s) reference cache/machine-check conditions.");
+        }
+
+        if (!cpuWheaEvents.Any() && cacheDumps == 0)
+            against.Add("No CPU/cache-specific WHEA or machine-check evidence found.");
     }
 
     private void ScoreStorage(
@@ -345,6 +416,27 @@ public class DiagnosisEngine
             forList.Add($"{scmFails} Service Control Manager failure event(s).");
         }
 
+        var repeatedServices = ServiceFailureAnalyzer.Summarize(_report.Events, minimumCount: 3);
+        if (repeatedServices.Any())
+        {
+            foreach (var svc in repeatedServices.Take(3))
+            {
+                scores[key] += svc.IsGpuRelated ? 1.2 : 0.8;
+                forList.Add($"Service '{svc.ServiceName}' failed/restarted {svc.Count} time(s).");
+            }
+        }
+
+        int avInterferenceCrashes = _report.Events.Count(e =>
+            e.Category == EventCategory.AppCrash &&
+            (e.Message.Contains("MsMpEng.exe", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("Antimalware Service Executable", StringComparison.OrdinalIgnoreCase) ||
+             e.Message.Contains("av", StringComparison.OrdinalIgnoreCase)));
+        if (avInterferenceCrashes > 0)
+        {
+            scores[key] += 1.5 * Math.Min(avInterferenceCrashes, 3);
+            forList.Add($"{avInterferenceCrashes} AppCrash event(s) involve security/antivirus components (possible third-party driver/filter interference).");
+        }
+
         if (!thirdPartyModules.Any() && scmFails == 0)
             against.Add("No specific third-party driver repeatedly identified as faulting module.");
     }
@@ -367,6 +459,7 @@ public class DiagnosisEngine
     {
         HypothesisType.NvidiaGpuVram => "NVIDIA dGPU / VRAM / Graphics Driver Path",
         HypothesisType.PcieMotherboardPower => "PCIe / Root Complex / Motherboard / Power Delivery",
+        HypothesisType.CpuCacheSubsystem => "CPU / Cache / Internal Bus Hardware Instability",
         HypothesisType.RamImcCpu => "RAM / IMC / CPU-Side Memory Instability",
         HypothesisType.StorageFilesystem => "Storage / Filesystem Corruption",
         HypothesisType.ThirdPartyDriver => "Third-Party Kernel Driver Interference",
@@ -387,6 +480,8 @@ public class DiagnosisEngine
             "Run GPU stress test (e.g., FurMark) and monitor for TDR. Use DDU to clean-install the latest NVIDIA driver. Run VRAM test with GPU-Z. Check GPU temps and power limits.",
         HypothesisType.PcieMotherboardPower =>
             "Reseat GPU in PCIe slot. Test with a known-good external PSU/power supply. Check for PCIe AER errors in Device Manager. Run HWiNFO64 to monitor PCIe error counters.",
+        HypothesisType.CpuCacheSubsystem =>
+            "Check CPU temperatures and motherboard BIOS/chipset firmware. Disable CPU overclocks/undervolts and retest. Run OCCT/Prime95 small FFT and monitor WHEA events.",
         HypothesisType.RamImcCpu =>
             "Run MemTest86 overnight (minimum 2 passes). Test each DIMM individually. Check RAM XMP/EXPO settings and try running at JEDEC spec.",
         HypothesisType.StorageFilesystem =>
@@ -438,6 +533,10 @@ public class DiagnosisEngine
         if (whea > 0)
             findings.Add($"{whea} WHEA hardware error event(s) — {_report.WheaPcieCount} classified as PCIe/GPU.");
 
+        int cpuWhea = _report.WheaEvents.Count(w => w.ClassifiedSubsystem == WheaSubsystem.CpuCache);
+        if (cpuWhea > 0)
+            findings.Add($"{cpuWhea} WHEA event(s) classified as CPU/cache.");
+
         int dumps = _report.CrashDumps.Count;
         if (dumps > 0)
         {
@@ -462,6 +561,9 @@ public class DiagnosisEngine
 
         return findings;
     }
+
+    private int RepeatedServiceFailureCount(string serviceName)
+        => ServiceFailureAnalyzer.RepeatedServiceFailureCount(_report.Events, serviceName);
 
     private string BuildExecutiveSummary(List<Hypothesis> hypotheses)
     {

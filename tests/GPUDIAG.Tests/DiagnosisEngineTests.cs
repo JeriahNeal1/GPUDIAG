@@ -233,4 +233,48 @@ public class DiagnosisEngineTests
         Assert.NotNull(driverHyp);
         Assert.NotEmpty(driverHyp.SupportingEvidence);
     }
+
+    [Fact]
+    public void Analyze_RepeatedNvidiaServiceFailures_ElevateGpuHypothesis()
+    {
+        var report = BuildReport(r =>
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                r.Events.Add(new EventLogItem
+                {
+                    Category = EventCategory.ServiceControl,
+                    Level = 2,
+                    TimeCreated = DateTime.UtcNow.AddMinutes(-i),
+                    Message = "The NVIDIA LocalSystem Container service terminated unexpectedly. It has done this 6 time(s)."
+                });
+            }
+        });
+
+        var result = new DiagnosisEngine(report).Analyze();
+        var gpu = result.TopHypotheses.FirstOrDefault(h => h.Type == HypothesisType.NvidiaGpuVram);
+        Assert.NotNull(gpu);
+        Assert.Contains(gpu.SupportingEvidence, x => x.Contains("NVIDIA LocalSystem Container", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Analyze_CpuCacheWhea_ElevatesCpuCacheHypothesis()
+    {
+        var report = BuildReport(r =>
+        {
+            r.WheaEvents.Add(new WheaEvent
+            {
+                ClassifiedSubsystem = WheaSubsystem.CpuCache,
+                EventId = 19,
+                Severity = "Error",
+                Message = "A corrected hardware error has occurred. Error Source: Processor Core. Cache Hierarchy Error.",
+                TimeCreated = DateTime.UtcNow
+            });
+        });
+
+        var result = new DiagnosisEngine(report).Analyze();
+        var cpu = result.TopHypotheses.FirstOrDefault(h => h.Type == HypothesisType.CpuCacheSubsystem);
+        Assert.NotNull(cpu);
+        Assert.True(cpu.ConfidenceScore > 0.1);
+    }
 }

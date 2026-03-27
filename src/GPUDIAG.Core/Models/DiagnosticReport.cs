@@ -16,6 +16,7 @@ public class DiagnosticReport
     public List<string> CollectionWarnings { get; set; } = new();
     public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
     public string ScanType { get; set; } = "Quick";
+    public string AppVersion { get; set; } = "Unknown";
 
     // Summary helpers
     public int GraphicsEventCount => Events.Count(e =>
