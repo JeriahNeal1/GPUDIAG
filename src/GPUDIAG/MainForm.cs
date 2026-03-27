@@ -607,7 +607,7 @@ public partial class MainForm : Form
             SetStatus(statusSummary);
             if (_lblScanBanner != null)
             {
-                _lblScanBanner.Text = $"Scan complete: {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA errors, {_report.CrashDumps.Count} dumps analysed in {elapsed:hh\\:mm\\:ss}";
+                _lblScanBanner.Text = $"Scan complete: {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA errors, {_report.CrashDumps.Count} dumps analyzed in {elapsed:hh\\:mm\\:ss}";
                 _lblScanBanner.BackColor = scanType.Equals("Deep", StringComparison.OrdinalIgnoreCase)
                     ? Color.FromArgb(0, 68, 110)
                     : Color.FromArgb(0, 100, 75);
@@ -1038,7 +1038,13 @@ public partial class MainForm : Form
 
             if (MessageBox.Show($"Report saved to:\r\n{path}\r\n\r\nOpen destination folder?", "Export Complete",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folder) { UseShellExecute = true });
+            {
+                var destinationFolder = Path.GetDirectoryName(path);
+                if (string.IsNullOrWhiteSpace(destinationFolder))
+                    destinationFolder = folder;
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(destinationFolder) { UseShellExecute = true });
+            }
         }
         catch (Exception ex)
         {
