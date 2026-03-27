@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <ApplicationIcon></ApplicationIcon>
+    <AssemblyTitle>GPUDIAG - GPU Diagnostic Tool</AssemblyTitle>
+    <AssemblyDescription>Windows graphics system diagnostic utility</AssemblyDescription>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <EmbeddedResource Include="app.ico" Condition="Exists('app.ico')" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GPUDIAG.Core\GPUDIAG.Core.csproj" />
+  </ItemGroup>
+</Project>
