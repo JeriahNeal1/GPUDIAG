@@ -110,6 +110,7 @@ public class SystemInfoCollector
     {
         try
         {
+            var candidates = new List<GpuInfo>();
             using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_VideoController");
             foreach (ManagementObject obj in searcher.Get())
             {
@@ -141,8 +142,24 @@ public class SystemInfoCollector
                 }
                 catch { }
 
-                info.Gpus.Add(gpu);
+                candidates.Add(gpu);
             }
+
+            var filtered = candidates
+                .Where(g =>
+                    !(IsLikelyVirtualDisplayDriver(g) && g.DedicatedVramBytes == 0) ||
+                    (g.IsNvidia || g.IsAmd || g.IsIntel))
+                .GroupBy(g => NormalizeGpuKey(g))
+                .Select(g => g
+                    .OrderByDescending(x => x.DedicatedVramBytes)
+                    .ThenByDescending(x => x.IsNvidia || x.IsAmd || x.IsIntel)
+                    .First())
+                .OrderByDescending(g => g.IsNvidia || g.IsAmd || g.IsIntel)
+                .ThenByDescending(g => g.DedicatedVramBytes)
+                .ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            info.Gpus.AddRange(filtered);
         }
         catch (Exception ex) { _log($"GPU: {ex.Message}"); }
     }
@@ -291,5 +308,30 @@ public class SystemInfoCollector
         }
         result.Add(current.ToString());
         return result.ToArray();
+    }
+
+    private static bool IsLikelyVirtualDisplayDriver(GpuInfo gpu)
+    {
+        var name = gpu.Name ?? string.Empty;
+        var inf = gpu.InfSection ?? string.Empty;
+        return name.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("Remote", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("Basic Display", StringComparison.OrdinalIgnoreCase) ||
+               inf.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeGpuKey(GpuInfo gpu)
+    {
+        var normalizedName = (gpu.Name ?? string.Empty)
+            .ToLowerInvariant()
+            .Replace("(r)", string.Empty)
+            .Replace("(tm)", string.Empty)
+            .Replace("microsoft ", string.Empty)
+            .Trim();
+
+        var baseKey = $"{normalizedName}|{gpu.DriverVersion}|{gpu.PciLocation}".Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(baseKey) || baseKey == "||")
+            baseKey = normalizedName;
+        return baseKey;
     }
 }

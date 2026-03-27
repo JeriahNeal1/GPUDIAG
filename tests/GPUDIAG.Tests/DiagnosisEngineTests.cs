@@ -195,6 +195,29 @@ public class DiagnosisEngineTests
     }
 
     [Fact]
+    public void Analyze_ConfidenceScores_AreNormalizedToTotalMass()
+    {
+        var report = BuildReport(r =>
+        {
+            r.Events.Add(new EventLogItem { Category = EventCategory.TdrDisplay, Level = 1, TimeCreated = DateTime.UtcNow });
+            r.Events.Add(new EventLogItem { Category = EventCategory.KernelPower, Level = 2, TimeCreated = DateTime.UtcNow });
+            r.WheaEvents.Add(new WheaEvent
+            {
+                ClassifiedSubsystem = WheaSubsystem.PcieRootPort,
+                Severity = "Error",
+                TimeCreated = DateTime.UtcNow
+            });
+            r.Storage = new StorageEvidence { SfcFailed = true };
+        });
+
+        var engine = new DiagnosisEngine(report);
+        var result = engine.Analyze();
+
+        var total = result.TopHypotheses.Sum(h => h.ConfidenceScore);
+        Assert.InRange(total, 0.99, 1.01);
+    }
+
+    [Fact]
     public void Analyze_ThirdPartyDriver_DetectedWhenRepeatedModule()
     {
         var report = BuildReport(r =>

@@ -1,9 +1,12 @@
 using System.Windows.Forms;
+using System.Windows.Forms.DataVisualization.Charting;
+using GPUDIAG.Configuration;
 using GPUDIAG.Collectors;
 using GPUDIAG.Core.Engine;
 using GPUDIAG.Core.Export;
 using GPUDIAG.Core.Models;
 using GPUDIAG.Core.Parsers;
+using GPUDIAG.Dialogs;
 
 namespace GPUDIAG;
 
@@ -12,6 +15,7 @@ public partial class MainForm : Form
     private DiagnosticReport _report = new();
     private bool _scanning;
     private string? _customDumpFolder;
+    private AppSettings _settings = AppSettingsManager.Load();
 
     // Tab controls
     private TabControl _tabs = null!;
@@ -22,16 +26,25 @@ public partial class MainForm : Form
 
     // Shared controls
     private Button _btnQuickScan = null!, _btnDeepScan = null!,
-                   _btnSelectDumps = null!, _btnExport = null!;
+                   _btnSelectDumps = null!, _btnExport = null!,
+                   _btnExportHtmlQuick = null!, _btnExportJsonQuick = null!,
+                   _btnExportZipQuick = null!, _btnSettings = null!;
     private ProgressBar _progressBar = null!;
     private Label _lblStatus = null!;
     private RichTextBox _rtbLog = null!;
+    private Label _lblAdminBanner = null!;
+    private Label _lblScanBanner = null!;
 
     // Tab content controls
-    private RichTextBox _rtbOverview = null!, _rtbTimeline = null!, _rtbDumps = null!,
-                        _rtbWhea = null!, _rtbGraphics = null!, _rtbMemory = null!,
-                        _rtbStorage = null!, _rtbCrashLogs = null!, _rtbDiagnosis = null!;
+    private RichTextBox _rtbOverview = null!, _rtbDumps = null!,
+                         _rtbWhea = null!, _rtbGraphics = null!, _rtbMemory = null!,
+                         _rtbStorage = null!, _rtbCrashLogs = null!, _rtbDiagnosis = null!;
     private RichTextBox _rtbExportStatus = null!;
+    private DataGridView _timelineGrid = null!;
+    private ComboBox _cmbTimelineCategory = null!;
+    private DateTimePicker _dtTimelineFrom = null!, _dtTimelineTo = null!;
+    private Label _lblTimelineMeta = null!;
+    private Chart _diagnosisChart = null!;
 
     private bool _isAdmin;
 
@@ -65,7 +78,7 @@ public partial class MainForm : Form
         var toolbar = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 50,
+            Height = 98,
             BackColor = System.Drawing.Color.FromArgb(15, 52, 96),
             Padding = new Padding(5)
         };
@@ -73,13 +86,20 @@ public partial class MainForm : Form
         _btnQuickScan = CreateButton("⚡ Quick Scan", System.Drawing.Color.FromArgb(0, 120, 215));
         _btnDeepScan = CreateButton("🔍 Deep Scan", System.Drawing.Color.FromArgb(0, 80, 160));
         _btnSelectDumps = CreateButton("📂 Select Dump Folder", System.Drawing.Color.FromArgb(80, 80, 120));
+        _btnSettings = CreateButton("⚙ Settings", System.Drawing.Color.FromArgb(58, 88, 118));
         _btnExport = CreateButton("💾 Export Report", System.Drawing.Color.FromArgb(0, 100, 80));
+        _btnExportHtmlQuick = CreateButton("HTML", System.Drawing.Color.FromArgb(0, 100, 80));
+        _btnExportJsonQuick = CreateButton("JSON", System.Drawing.Color.FromArgb(0, 90, 110));
+        _btnExportZipQuick = CreateButton("ZIP", System.Drawing.Color.FromArgb(100, 60, 0));
         _btnExport.Enabled = false;
+        _btnExportHtmlQuick.Enabled = false;
+        _btnExportJsonQuick.Enabled = false;
+        _btnExportZipQuick.Enabled = false;
 
         _progressBar = new ProgressBar
         {
             Style = ProgressBarStyle.Marquee,
-            Width = 200,
+            Width = 130,
             Height = 22,
             Visible = false,
             MarqueeAnimationSpeed = 30
@@ -94,35 +114,50 @@ public partial class MainForm : Form
             Padding = new Padding(5, 8, 20, 0)
         };
 
-        toolbar.Controls.AddRange(new Control[]
-        {
-            lblTitle, _btnQuickScan, _btnDeepScan, _btnSelectDumps, _btnExport, _progressBar
-        });
-
-        foreach (Control c in toolbar.Controls)
-        {
-            if (c is Button) { c.Top = 10; }
-            c.Left = toolbar.Controls.OfType<Control>()
-                .Where(x => x != c)
-                .Sum(x => x.Width + 5) + 5;
-        }
-
-        // Manually position with FlowLayout
-        toolbar.Controls.Clear();
         var flow = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            Height = 44,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             Padding = new Padding(3)
         };
+
         flow.Controls.AddRange(new Control[]
         {
-            lblTitle, _btnQuickScan, _btnDeepScan, _btnSelectDumps, _btnExport, _progressBar
+            lblTitle, _btnQuickScan, _btnDeepScan, _btnSelectDumps, _btnSettings, _btnExport,
+            _btnExportHtmlQuick, _btnExportJsonQuick, _btnExportZipQuick, _progressBar
         });
 
         // Align progress bar vertically
         _progressBar.Margin = new Padding(5, 14, 0, 0);
+
+        _lblScanBanner = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 22,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Visible = false,
+            BackColor = System.Drawing.Color.FromArgb(0, 90, 75),
+            ForeColor = Color.White,
+            Padding = new Padding(8, 0, 0, 0),
+            Font = new Font("Consolas", 9f, FontStyle.Bold)
+        };
+
+        _lblAdminBanner = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 22,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Visible = false,
+            BackColor = System.Drawing.Color.FromArgb(120, 72, 0),
+            ForeColor = Color.FromArgb(255, 245, 220),
+            Padding = new Padding(8, 0, 0, 0),
+            Font = new Font("Consolas", 9f, FontStyle.Bold)
+        };
+
+        toolbar.Controls.Add(_lblAdminBanner);
+        toolbar.Controls.Add(_lblScanBanner);
         toolbar.Controls.Add(flow);
 
         Controls.Add(toolbar);
@@ -130,7 +165,11 @@ public partial class MainForm : Form
         _btnQuickScan.Click += (_, _) => RunScanAsync("Quick");
         _btnDeepScan.Click += (_, _) => RunScanAsync("Deep");
         _btnSelectDumps.Click += SelectDumpFolder;
+        _btnSettings.Click += OpenSettings;
         _btnExport.Click += ExportReport;
+        _btnExportHtmlQuick.Click += (_, _) => ExportFile("html");
+        _btnExportJsonQuick.Click += (_, _) => ExportFile("json");
+        _btnExportZipQuick.Click += (_, _) => ExportFile("zip");
     }
 
     private void BuildTabs()
@@ -153,7 +192,6 @@ public partial class MainForm : Form
         _tabExport = CreateTab("Export");
 
         _rtbOverview = AddRtb(_tabOverview);
-        _rtbTimeline = AddRtb(_tabTimeline);
         _rtbDumps = AddRtb(_tabDumps);
         _rtbWhea = AddRtb(_tabWhea);
         _rtbGraphics = AddRtb(_tabGraphics);
@@ -161,8 +199,8 @@ public partial class MainForm : Form
         _rtbStorage = AddRtb(_tabStorage);
         _rtbCrashLogs = AddRtb(_tabCrashLogs);
 
-        // Diagnosis tab — styled differently
-        _rtbDiagnosis = AddRtb(_tabDiagnosis);
+        BuildTimelineTab();
+        BuildDiagnosisTab();
 
         // Export tab
         var exportPanel = new Panel { Dock = DockStyle.Fill };
@@ -249,18 +287,200 @@ public partial class MainForm : Form
         Controls.Add(statusPanel);
     }
 
+    private void BuildTimelineTab()
+    {
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = System.Drawing.Color.FromArgb(22, 33, 62)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+        var filterPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = false,
+            Padding = new Padding(8, 8, 8, 4),
+            BackColor = System.Drawing.Color.FromArgb(18, 27, 50)
+        };
+
+        filterPanel.Controls.Add(CreateFilterLabel("Category"));
+        _cmbTimelineCategory = new ComboBox
+        {
+            Width = 190,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = System.Drawing.Color.FromArgb(15, 52, 96),
+            ForeColor = Color.White
+        };
+        _cmbTimelineCategory.Items.AddRange(new object[]
+        {
+            "All", "Kernel-Power", "WHEA", "TDR/Display", "Graphics driver", "Disk/FileSystem", "Crash", "Other"
+        });
+        _cmbTimelineCategory.SelectedIndex = 0;
+        filterPanel.Controls.Add(_cmbTimelineCategory);
+
+        filterPanel.Controls.Add(CreateFilterLabel("From"));
+        _dtTimelineFrom = new DateTimePicker
+        {
+            Width = 170,
+            Format = DateTimePickerFormat.Custom,
+            CustomFormat = "yyyy-MM-dd HH:mm",
+            Value = DateTime.Now.AddDays(-_settings.EventLookbackDays),
+            BackColor = System.Drawing.Color.FromArgb(15, 52, 96),
+            ForeColor = Color.White
+        };
+        filterPanel.Controls.Add(_dtTimelineFrom);
+
+        filterPanel.Controls.Add(CreateFilterLabel("To"));
+        _dtTimelineTo = new DateTimePicker
+        {
+            Width = 170,
+            Format = DateTimePickerFormat.Custom,
+            CustomFormat = "yyyy-MM-dd HH:mm",
+            Value = DateTime.Now,
+            BackColor = System.Drawing.Color.FromArgb(15, 52, 96),
+            ForeColor = Color.White
+        };
+        filterPanel.Controls.Add(_dtTimelineTo);
+
+        _lblTimelineMeta = new Label
+        {
+            AutoSize = true,
+            ForeColor = Color.FromArgb(0, 212, 255),
+            Padding = new Padding(12, 6, 0, 0),
+            Text = "No events loaded."
+        };
+        filterPanel.Controls.Add(_lblTimelineMeta);
+
+        _timelineGrid = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AllowUserToOrderColumns = false,
+            MultiSelect = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BackgroundColor = Color.FromArgb(22, 33, 62),
+            BorderStyle = BorderStyle.None,
+            GridColor = Color.FromArgb(42, 58, 92),
+            RowHeadersVisible = false
+        };
+        _timelineGrid.EnableHeadersVisualStyles = false;
+        _timelineGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(15, 52, 96);
+        _timelineGrid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(0, 212, 255);
+        _timelineGrid.DefaultCellStyle.BackColor = Color.FromArgb(22, 33, 62);
+        _timelineGrid.DefaultCellStyle.ForeColor = Color.FromArgb(220, 220, 220);
+        _timelineGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(32, 68, 110);
+        _timelineGrid.DefaultCellStyle.SelectionForeColor = Color.White;
+
+        _timelineGrid.Columns.Add("colTime", "Date/Time");
+        _timelineGrid.Columns.Add("colSeverity", "Severity");
+        _timelineGrid.Columns.Add("colCategory", "Category");
+        _timelineGrid.Columns.Add("colProvider", "Provider");
+        _timelineGrid.Columns.Add("colEventId", "Event ID");
+        _timelineGrid.Columns.Add("colSummary", "Summary");
+
+        _cmbTimelineCategory.SelectedIndexChanged += (_, _) => RefreshTimelineGrid();
+        _dtTimelineFrom.ValueChanged += (_, _) => RefreshTimelineGrid();
+        _dtTimelineTo.ValueChanged += (_, _) => RefreshTimelineGrid();
+        _timelineGrid.CellDoubleClick += TimelineGridOnCellDoubleClick;
+
+        root.Controls.Add(filterPanel, 0, 0);
+        root.Controls.Add(_timelineGrid, 0, 1);
+        _tabTimeline.Controls.Add(root);
+    }
+
+    private static Label CreateFilterLabel(string text) => new()
+    {
+        Text = text + ":",
+        ForeColor = Color.FromArgb(200, 200, 200),
+        AutoSize = true,
+        Padding = new Padding(6, 6, 2, 0)
+    };
+
+    private void BuildDiagnosisTab()
+    {
+        var root = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Horizontal,
+            SplitterDistance = 260,
+            BackColor = Color.FromArgb(22, 33, 62)
+        };
+
+        _diagnosisChart = new Chart
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(22, 33, 62)
+        };
+
+        var area = new ChartArea("DiagnosisArea")
+        {
+            BackColor = Color.FromArgb(18, 27, 50)
+        };
+        area.AxisX.MajorGrid.Enabled = false;
+        area.AxisX.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
+        area.AxisX.Interval = 1;
+        area.AxisY.Maximum = 100;
+        area.AxisY.Minimum = 0;
+        area.AxisY.Title = "Confidence (%)";
+        area.AxisY.TitleForeColor = Color.FromArgb(180, 210, 245);
+        area.AxisY.LabelStyle.ForeColor = Color.FromArgb(220, 220, 220);
+        area.AxisY.MajorGrid.LineColor = Color.FromArgb(45, 62, 94);
+        _diagnosisChart.ChartAreas.Add(area);
+
+        var series = new Series("Hypotheses")
+        {
+            ChartType = SeriesChartType.Bar,
+            IsValueShownAsLabel = true,
+            LabelForeColor = Color.White,
+            Font = new Font("Consolas", 8.5f, FontStyle.Bold)
+        };
+        _diagnosisChart.Series.Add(series);
+        _diagnosisChart.Legends.Clear();
+
+        _rtbDiagnosis = new RichTextBox
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(22, 33, 62),
+            ForeColor = Color.FromArgb(200, 200, 200),
+            Font = new Font("Consolas", 9f),
+            ReadOnly = true,
+            ScrollBars = RichTextBoxScrollBars.Both,
+            WordWrap = false
+        };
+
+        root.Panel1.Controls.Add(_diagnosisChart);
+        root.Panel2.Controls.Add(_rtbDiagnosis);
+        _tabDiagnosis.Controls.Add(root);
+    }
+
     private void SetInitialText()
     {
         _rtbOverview.Text = "Click 'Quick Scan' or 'Deep Scan' to begin diagnosis.\r\n\r\n" +
-                            $"Running as: {(_isAdmin ? "Administrator" : "Standard User (some data sources limited)")}\r\n";
+                            $"Running as: {(_isAdmin ? "Administrator" : "Standard User (some data sources limited)")}\r\n" +
+                            $"Event look-back: {_settings.EventLookbackDays} day(s)\r\n";
+        _rtbDiagnosis.Text = "Run scan to generate diagnosis.";
     }
 
     private void UpdateAdminStatus()
     {
         if (!_isAdmin)
         {
+            _lblAdminBanner.Text = "⚠ Not running as administrator. WHEA log, minidumps, and parts of WMI may be incomplete. Use 'Run as administrator' for full diagnostics.";
+            _lblAdminBanner.Visible = true;
             AppendLog("⚠ Running without elevation. Some collectors (WHEA, some WMI, minidumps) may return limited data. " +
                       "Right-click GPUDIAG and 'Run as administrator' for full results.", System.Drawing.Color.Yellow);
+        }
+        else if (_lblAdminBanner != null)
+        {
+            _lblAdminBanner.Visible = false;
         }
     }
 
@@ -269,14 +489,19 @@ public partial class MainForm : Form
     private async void RunScanAsync(string scanType)
     {
         if (_scanning) return;
+        var started = DateTime.UtcNow;
         _scanning = true;
         _btnQuickScan.Enabled = false;
         _btnDeepScan.Enabled = false;
         _progressBar.Visible = true;
         _btnExport.Enabled = false;
+        _btnExportHtmlQuick.Enabled = false;
+        _btnExportJsonQuick.Enabled = false;
+        _btnExportZipQuick.Enabled = false;
 
         AppendLog($"Starting {scanType} scan...", System.Drawing.Color.Cyan);
         SetStatus($"Running {scanType} scan...");
+        if (_lblScanBanner != null) _lblScanBanner.Visible = false;
 
         _report = new DiagnosticReport { ScanType = scanType };
 
@@ -292,23 +517,39 @@ public partial class MainForm : Form
 
             // Event logs
             SetStatus("Collecting event logs...");
-            var eventCollector = new EventLogCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); }, 30);
+            var eventCollector = new EventLogCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); }, _settings.EventLookbackDays);
             _report.Events = await eventCollector.CollectAsync();
             _report.WheaEvents = eventCollector.ExtractWheaEvents(_report.Events);
             _report.Timeline = eventCollector.BuildTimeline(_report.Events);
             UpdateEventTabs();
 
             // WER / crash reports
-            SetStatus("Collecting WER / crash reports...");
-            var werCollector = new WerCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
-            _report.WerEntries = await werCollector.CollectAsync();
+            if (_settings.EnableWerCollector)
+            {
+                SetStatus("Collecting WER / crash reports...");
+                var werCollector = new WerCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
+                _report.WerEntries = await werCollector.CollectAsync();
+            }
+            else
+            {
+                Log("WER collector disabled in settings.");
+                _report.WerEntries = new List<WerEntry>();
+            }
             UpdateCrashLogsTab();
 
             // Java crash logs
-            SetStatus("Searching for Java crash logs...");
-            var javaFolders = GetJavaSearchFolders();
-            _report.JavaCrashLogs = JavaCrashLogParser.FindAndParseAll(javaFolders,
-                msg => { Log(msg); });
+            if (_settings.EnableJavaCollector)
+            {
+                SetStatus("Searching for Java crash logs...");
+                var javaFolders = GetJavaSearchFolders();
+                _report.JavaCrashLogs = JavaCrashLogParser.FindAndParseAll(javaFolders,
+                    msg => { Log(msg); });
+            }
+            else
+            {
+                Log("Java crash log collector disabled in settings.");
+                _report.JavaCrashLogs = new List<JavaCrashLog>();
+            }
             UpdateCrashLogsTab();
 
             if (scanType == "Deep")
@@ -320,9 +561,27 @@ public partial class MainForm : Form
                 UpdateDumpsTab();
 
                 // Storage
-                SetStatus("Collecting storage evidence...");
-                var storageCollector = new StorageCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
-                _report.Storage = await storageCollector.CollectAsync(_report.Events);
+                if (_settings.EnableWmiStorageCollector)
+                {
+                    SetStatus("Collecting storage evidence...");
+                    var storageCollector = new StorageCollector(msg => { _report.CollectionErrors.Add(msg); Log(msg); });
+                    _report.Storage = await storageCollector.CollectAsync(_report.Events);
+                }
+                else
+                {
+                    Log("WMI storage collector disabled in settings.");
+                    _report.Storage = new StorageEvidence
+                    {
+                        PrimaryVsSecondaryAssessment = "Storage collector disabled in settings."
+                    };
+                }
+                UpdateStorageTab();
+            }
+            else
+            {
+                _report.CrashDumps = new List<CrashDump>();
+                _report.Storage = null;
+                UpdateDumpsTab();
                 UpdateStorageTab();
             }
 
@@ -339,7 +598,21 @@ public partial class MainForm : Form
             UpdateDiagnosisTab();
 
             _btnExport.Enabled = true;
-            SetStatus($"{scanType} scan complete. {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA, {_report.CrashDumps.Count} dumps analyzed.");
+            _btnExportHtmlQuick.Enabled = true;
+            _btnExportJsonQuick.Enabled = true;
+            _btnExportZipQuick.Enabled = true;
+
+            var elapsed = DateTime.UtcNow - started;
+            var statusSummary = $"{scanType} scan complete. {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA, {_report.CrashDumps.Count} dumps analyzed.";
+            SetStatus(statusSummary);
+            if (_lblScanBanner != null)
+            {
+                _lblScanBanner.Text = $"Scan complete: {_report.Events.Count} events, {_report.WheaEvents.Count} WHEA errors, {_report.CrashDumps.Count} dumps analyzed in {elapsed:hh\\:mm\\:ss}";
+                _lblScanBanner.BackColor = scanType.Equals("Deep", StringComparison.OrdinalIgnoreCase)
+                    ? Color.FromArgb(0, 68, 110)
+                    : Color.FromArgb(0, 100, 75);
+                _lblScanBanner.Visible = true;
+            }
             AppendLog($"✓ {scanType} scan complete.", System.Drawing.Color.LimeGreen);
 
             // Switch to Diagnosis tab
@@ -423,29 +696,7 @@ public partial class MainForm : Form
     {
         InvokeIfNeeded(() =>
         {
-            // Timeline tab
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"═══ EVENT TIMELINE ({_report.Timeline.Count} anchor events, {_report.Events.Count} total events) ═══");
-            sb.AppendLine("Window: ±10 minutes around bugchecks, TDRs, WHEA, app crashes");
-            sb.AppendLine();
-
-            foreach (var t in _report.Timeline.OrderByDescending(x => x.Timestamp).Take(100))
-            {
-                sb.AppendLine($"▶ {t.Timestamp:yyyy-MM-dd HH:mm:ss} [{t.Severity}]");
-                sb.AppendLine($"  {t.Summary}");
-                if (t.CorrelatedEvents.Any())
-                {
-                    sb.AppendLine($"  ↳ {t.CorrelatedEvents.Count} correlated events:");
-                    foreach (var ce in t.CorrelatedEvents.Take(5))
-                        sb.AppendLine($"    {ce.TimeCreated:HH:mm:ss} [{ce.Category}] {ce.ProviderName} ID={ce.EventId}");
-                }
-                sb.AppendLine();
-            }
-
-            if (!_report.Timeline.Any())
-                sb.AppendLine("No critical anchor events found in the last 30 days.");
-
-            _rtbTimeline.Text = sb.ToString();
+            RefreshTimelineGrid();
 
             // WHEA tab
             var wSb = new System.Text.StringBuilder();
@@ -454,7 +705,7 @@ public partial class MainForm : Form
 
             if (!_report.WheaEvents.Any())
             {
-                wSb.AppendLine("No WHEA events found in the last 30 days.");
+                wSb.AppendLine($"No WHEA events found in the last {_settings.EventLookbackDays} days.");
                 wSb.AppendLine("Note: WHEA log may require elevation or may be empty if no hardware errors occurred.");
             }
             else
@@ -688,7 +939,7 @@ public partial class MainForm : Form
                 var h = diag.TopHypotheses[i];
                 var bar = GetConfidenceBar(h.ConfidenceScore);
                 sb.AppendLine($"{i + 1}. {h.Name}");
-                sb.AppendLine($"   Confidence: {h.ConfidenceLabel} ({h.ConfidenceScore:P0}) {bar}");
+                sb.AppendLine($"   Confidence: {h.ConfidenceLabel} ({h.ConfidenceScore:P0}) {bar}   (+{h.SupportingEvidence.Count}, -{h.CounterEvidence.Count})");
 
                 if (h.SupportingEvidence.Any())
                 {
@@ -718,6 +969,7 @@ public partial class MainForm : Form
             sb.AppendLine(diag.RecommendedNextAction);
 
             _rtbDiagnosis.Text = sb.ToString();
+            UpdateDiagnosisChart(diag);
         });
     }
 
@@ -731,7 +983,17 @@ public partial class MainForm : Form
 
     private void ExportReport(object? sender, EventArgs e)
     {
-        _tabs.SelectedTab = _tabExport;
+        if (_report.Diagnosis == null)
+        {
+            MessageBox.Show("Please run a scan first.", "No data", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var menu = new ContextMenuStrip();
+        menu.Items.Add("Export HTML", null, (_, _) => ExportFile("html"));
+        menu.Items.Add("Export JSON", null, (_, _) => ExportFile("json"));
+        menu.Items.Add("Export ZIP Bundle", null, (_, _) => ExportFile("zip"));
+        menu.Show(_btnExport, new Point(0, _btnExport.Height));
     }
 
     private void ExportFile(string format)
@@ -774,9 +1036,15 @@ public partial class MainForm : Form
             AppendLog($"✓ Report exported: {path}", System.Drawing.Color.LimeGreen);
             _rtbExportStatus.AppendText($"Exported: {path}\r\n");
 
-            if (MessageBox.Show($"Report saved to:\r\n{path}\r\n\r\nOpen now?", "Export Complete",
+            if (MessageBox.Show($"Report saved to:\r\n{path}\r\n\r\nOpen destination folder?", "Export Complete",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+            {
+                var destinationFolder = Path.GetDirectoryName(path);
+                if (string.IsNullOrWhiteSpace(destinationFolder))
+                    destinationFolder = folder;
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(destinationFolder) { UseShellExecute = true });
+            }
         }
         catch (Exception ex)
         {
@@ -798,6 +1066,24 @@ public partial class MainForm : Form
             _customDumpFolder = dlg.SelectedPath;
             AppendLog($"Custom dump folder: {_customDumpFolder}", System.Drawing.Color.Cyan);
         }
+    }
+
+    private void OpenSettings(object? sender, EventArgs e)
+    {
+        using var dlg = new SettingsForm(_settings);
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _settings = dlg.Settings.Clone();
+        AppSettingsManager.Save(_settings);
+        if (_dtTimelineFrom != null && _dtTimelineTo != null)
+        {
+            _dtTimelineFrom.Value = DateTime.Now.AddDays(-_settings.EventLookbackDays);
+            _dtTimelineTo.Value = DateTime.Now;
+        }
+        AppendLog($"Settings saved. Look-back={_settings.EventLookbackDays} days, WER={_settings.EnableWerCollector}, Java={_settings.EnableJavaCollector}, WMI storage={_settings.EnableWmiStorageCollector}.", Color.Cyan);
+        UpdateOverviewTab();
+        RefreshTimelineGrid();
     }
 
     private static IEnumerable<string> GetJavaSearchFolders()
@@ -840,6 +1126,123 @@ public partial class MainForm : Form
     {
         if (InvokeRequired) Invoke(action);
         else action();
+    }
+
+    private void RefreshTimelineGrid()
+    {
+        if (_timelineGrid == null || _cmbTimelineCategory == null || _dtTimelineFrom == null || _dtTimelineTo == null)
+            return;
+
+        _timelineGrid.Rows.Clear();
+        if (!_report.Timeline.Any())
+        {
+            if (_lblTimelineMeta != null)
+                _lblTimelineMeta.Text = "No timeline anchor events available. Run a scan.";
+            return;
+        }
+
+        var fromUtc = _dtTimelineFrom.Value.ToUniversalTime();
+        var toUtc = _dtTimelineTo.Value.ToUniversalTime();
+        if (toUtc < fromUtc)
+        {
+            (fromUtc, toUtc) = (toUtc, fromUtc);
+        }
+
+        var selectedCategory = _cmbTimelineCategory.SelectedItem?.ToString() ?? "All";
+        // Requery from report events whenever filters change so the correlation window
+        // reflects the currently selected look-back range.
+        var sourceEvents = _report.Events
+            .Where(e => e.TimeCreated >= fromUtc && e.TimeCreated <= toUtc)
+            .ToList();
+        var rebuiltTimeline = new EventLogCollector(_ => { }, _settings.EventLookbackDays).BuildTimeline(sourceEvents);
+
+        var filtered = rebuiltTimeline
+            .Where(t => MatchesTimelineCategory(t, selectedCategory))
+            .OrderByDescending(t => t.Timestamp)
+            .ToList();
+
+        foreach (var timelineItem in filtered)
+        {
+            var rowIndex = _timelineGrid.Rows.Add(
+                timelineItem.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                timelineItem.Severity.ToString(),
+                GetTimelineCategoryLabel(timelineItem.Category),
+                timelineItem.Source,
+                timelineItem.EventId,
+                NormalizeSummary(timelineItem.Summary, 180));
+            _timelineGrid.Rows[rowIndex].Tag = timelineItem;
+        }
+
+        if (_lblTimelineMeta != null)
+            _lblTimelineMeta.Text = $"Showing {filtered.Count} / {rebuiltTimeline.Count} anchor events from {sourceEvents.Count} total events in selected window.";
+    }
+
+    private static string NormalizeSummary(string? text, int maxLength)
+    {
+        var cleaned = text?.Replace("\r", " ").Replace("\n", " ").Trim() ?? string.Empty;
+        if (cleaned.Length <= maxLength)
+            return cleaned;
+        return cleaned[..maxLength] + "…";
+    }
+
+    private static string GetTimelineCategoryLabel(EventCategory category) => category switch
+    {
+        EventCategory.KernelPower => "Kernel-Power",
+        EventCategory.Whea => "WHEA",
+        EventCategory.TdrDisplay => "TDR/Display",
+        EventCategory.NvidiaDriver => "Graphics driver",
+        EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage => "Disk/FileSystem",
+        EventCategory.BugCheck or EventCategory.AppCrash => "Crash",
+        _ => "Other"
+    };
+
+    private static bool MatchesTimelineCategory(TimelineEvent timeline, string selectedCategory)
+    {
+        if (string.Equals(selectedCategory, "All", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return string.Equals(GetTimelineCategoryLabel(timeline.Category), selectedCategory, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void TimelineGridOnCellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        var row = _timelineGrid.Rows[e.RowIndex];
+        if (row.Tag is not TimelineEvent timelineEvent) return;
+
+        var anchor = timelineEvent.AnchorEvent ??
+                     _report.Events.FirstOrDefault(x =>
+                         x.EventId == timelineEvent.EventId &&
+                         x.ProviderName.Equals(timelineEvent.Source, StringComparison.OrdinalIgnoreCase) &&
+                         Math.Abs((x.TimeCreated - timelineEvent.Timestamp).TotalMinutes) <= 1);
+
+        using var dlg = new EventDetailsDialog(timelineEvent, anchor);
+        dlg.ShowDialog(this);
+    }
+
+    private void UpdateDiagnosisChart(DiagnosisResult diag)
+    {
+        if (_diagnosisChart.Series.Count == 0)
+            return;
+
+        var series = _diagnosisChart.Series[0];
+        series.Points.Clear();
+        if (!diag.TopHypotheses.Any())
+            return;
+
+        foreach (var h in diag.TopHypotheses.Take(5))
+        {
+            var label = h.Name.Length > 28 ? h.Name[..28] + "…" : h.Name;
+            var pointIndex = series.Points.AddXY(label, Math.Round(h.ConfidenceScore * 100, 1));
+            var point = series.Points[pointIndex];
+            point.Color = h.ConfidenceScore >= 0.5
+                ? Color.FromArgb(220, 68, 68)
+                : h.ConfidenceScore >= 0.25
+                    ? Color.FromArgb(255, 170, 0)
+                    : Color.FromArgb(68, 170, 68);
+            point.Label = $"{h.ConfidenceScore:P0} (+{h.SupportingEvidence.Count}, -{h.CounterEvidence.Count})";
+            point.AxisLabel = label;
+        }
     }
 
     private static TabPage CreateTab(string title)

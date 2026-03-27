@@ -16,13 +16,17 @@ public class DiagnosisEngine
 
     public DiagnosisResult Analyze()
     {
+        // Baseline prior applied to every hypothesis. This keeps output calibrated so
+        // a single weak signal does not monopolize confidence at 100%, while still
+        // allowing strong evidence to dominate after normalization.
+        const double BasePrior = 0.2;
         var scores = new Dictionary<HypothesisType, double>
         {
-            [HypothesisType.NvidiaGpuVram] = 0.0,
-            [HypothesisType.PcieMotherboardPower] = 0.0,
-            [HypothesisType.RamImcCpu] = 0.0,
-            [HypothesisType.StorageFilesystem] = 0.0,
-            [HypothesisType.ThirdPartyDriver] = 0.0
+            [HypothesisType.NvidiaGpuVram] = BasePrior,
+            [HypothesisType.PcieMotherboardPower] = BasePrior,
+            [HypothesisType.RamImcCpu] = BasePrior,
+            [HypothesisType.StorageFilesystem] = BasePrior,
+            [HypothesisType.ThirdPartyDriver] = BasePrior
         };
 
         var evidence = new Dictionary<HypothesisType, (List<string> For, List<string> Against)>();
@@ -35,14 +39,13 @@ public class DiagnosisEngine
         ScoreStorage(scores, evidence);
         ScoreThirdPartyDriver(scores, evidence);
 
-        // Normalize so max is ~1.0, but use a minimum denominator so weak evidence
-        // doesn't get artificially inflated to high confidence.
-        // A "strong evidence" set (e.g., 5 TDR events + nvgpucomp dump) scores ~20+.
-        // SFC failure alone scores 0.5, which should normalize to ~0.025 if other evidence is present.
-        const double MinNormDenominator = 15.0;
-        double max = Math.Max(scores.Values.Max(), MinNormDenominator);
+        // Normalize by total score mass:
+        // confidence(h) = rawScore(h) / Σ(rawScore(all hypotheses))
+        // This produces a probability-like ranking that sums to 100%.
+        double sum = scores.Values.Sum();
+        if (sum <= 0.0) sum = 1.0;
         foreach (var key in scores.Keys.ToList())
-            scores[key] = Math.Min(scores[key] / max, 1.0);
+            scores[key] = Math.Min(scores[key] / sum, 1.0);
 
         var hypotheses = scores
             .OrderByDescending(kv => kv.Value)
@@ -81,18 +84,21 @@ public class DiagnosisEngine
         var (forList, against) = evidence[key];
 
         // TDR / display reset events
-        int tdrCount = _report.Events.Count(e => e.Category == EventCategory.TdrDisplay);
-        if (tdrCount > 0)
+        var tdrEvents = _report.Events.Where(e => e.Category == EventCategory.TdrDisplay).ToList();
+        int tdrCount = tdrEvents.Count;
+        if (tdrEvents.Count > 0)
         {
-            scores[key] += 3.0 * Math.Min(tdrCount, 5);
+            // Severity weighting: repeated Critical/Error TDRs are stronger than warnings.
+            scores[key] += 3.0 * Math.Min(WeightedEventCount(tdrEvents), 6.0);
             forList.Add($"{tdrCount} TDR/display reset event(s) found in event log.");
         }
 
         // NVIDIA driver events
-        int nvidiaEvents = _report.Events.Count(e => e.Category == EventCategory.NvidiaDriver);
-        if (nvidiaEvents > 0)
+        var nvidiaDriverEvents = _report.Events.Where(e => e.Category == EventCategory.NvidiaDriver).ToList();
+        int nvidiaEvents = nvidiaDriverEvents.Count;
+        if (nvidiaDriverEvents.Count > 0)
         {
-            scores[key] += 2.5 * Math.Min(nvidiaEvents, 5);
+            scores[key] += 2.5 * Math.Min(WeightedEventCount(nvidiaDriverEvents), 6.0);
             forList.Add($"{nvidiaEvents} NVIDIA driver event(s) in event log.");
         }
 
@@ -118,7 +124,8 @@ public class DiagnosisEngine
             (w.EventName.Contains("141") || w.EventName.Contains("117")));
         if (lke > 0)
         {
-            scores[key] += 3.5 * Math.Min(lke, 3);
+            // LiveKernelEvent crashes are kernel-level signals and weighted higher than app-only crashes.
+            scores[key] += 4.0 * Math.Min(lke, 3);
             forList.Add($"{lke} LiveKernelEvent 141/117 WER entries (graphics TDR).");
         }
 
@@ -158,11 +165,14 @@ public class DiagnosisEngine
         var (forList, against) = evidence[key];
 
         // WHEA PCIe/root-port events
-        int wheaPcie = _report.WheaEvents.Count(w =>
-            w.ClassifiedSubsystem is WheaSubsystem.PcieRootPort or WheaSubsystem.GpuDevice);
+        var wheaPcieEvents = _report.WheaEvents
+            .Where(w => w.ClassifiedSubsystem is WheaSubsystem.PcieRootPort or WheaSubsystem.GpuDevice)
+            .ToList();
+        int wheaPcie = wheaPcieEvents.Count;
         if (wheaPcie > 0)
         {
-            scores[key] += 5.0 * Math.Min(wheaPcie, 4);
+            // WHEA is hardware-signaled evidence, so it is severity-weighted and high-impact.
+            scores[key] += 5.0 * Math.Min(WeightedWheaCount(wheaPcieEvents), 6.5);
             forList.Add($"{wheaPcie} WHEA event(s) classified as PCIe/root-port or GPU device.");
         }
 
@@ -175,10 +185,11 @@ public class DiagnosisEngine
         }
 
         // Kernel-Power events (power delivery issues)
-        int kernelPower = _report.Events.Count(e => e.Category == EventCategory.KernelPower);
+        var kernelPowerEvents = _report.Events.Where(e => e.Category == EventCategory.KernelPower).ToList();
+        int kernelPower = kernelPowerEvents.Count;
         if (kernelPower > 0)
         {
-            scores[key] += 2.0 * Math.Min(kernelPower, 3);
+            scores[key] += 2.0 * Math.Min(WeightedEventCount(kernelPowerEvents), 4.0);
             forList.Add($"{kernelPower} Kernel-Power event(s) (possible power delivery issue).");
         }
 
@@ -209,10 +220,11 @@ public class DiagnosisEngine
         }
 
         // WHEA memory events
-        int wheaMem = _report.WheaEvents.Count(w => w.ClassifiedSubsystem == WheaSubsystem.MemorySubsystem);
+        var wheaMemEvents = _report.WheaEvents.Where(w => w.ClassifiedSubsystem == WheaSubsystem.MemorySubsystem).ToList();
+        int wheaMem = wheaMemEvents.Count;
         if (wheaMem > 0)
         {
-            scores[key] += 4.0 * Math.Min(wheaMem, 3);
+            scores[key] += 4.0 * Math.Min(WeightedWheaCount(wheaMemEvents), 4.5);
             forList.Add($"{wheaMem} WHEA event(s) implicate memory subsystem.");
         }
 
@@ -259,10 +271,11 @@ public class DiagnosisEngine
         }
 
         // Disk / filesystem events
-        int diskEvents = _report.Events.Count(e => e.Category is EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage);
+        var storageEvents = _report.Events.Where(e => e.Category is EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage).ToList();
+        int diskEvents = storageEvents.Count;
         if (diskEvents > 0)
         {
-            scores[key] += 2.0 * Math.Min(diskEvents, 5);
+            scores[key] += 2.0 * Math.Min(WeightedEventCount(storageEvents), 6.0);
             forList.Add($"{diskEvents} disk/filesystem/storage event(s) in event log.");
         }
 
@@ -324,10 +337,11 @@ public class DiagnosisEngine
         }
 
         // Service Control Manager failures
-        int scmFails = _report.Events.Count(e => e.Category == EventCategory.ServiceControl && e.Level <= 3);
+        var scmEvents = _report.Events.Where(e => e.Category == EventCategory.ServiceControl && e.Level <= 3).ToList();
+        int scmFails = scmEvents.Count;
         if (scmFails > 0)
         {
-            scores[key] += 1.0 * Math.Min(scmFails, 3);
+            scores[key] += 1.0 * Math.Min(WeightedEventCount(scmEvents), 4.0);
             forList.Add($"{scmFails} Service Control Manager failure event(s).");
         }
 
@@ -381,6 +395,32 @@ public class DiagnosisEngine
             "Boot to Safe Mode and test — if stable, a third-party driver is implicated. Use MSConfig or Autoruns to isolate. Run Driver Verifier on suspects.",
         _ => "Collect additional evidence and run targeted hardware tests."
     };
+
+    private static double WeightedEventCount(IEnumerable<EventLogItem> events)
+    {
+        return events.Sum(e => e.Level switch
+        {
+            <= 2 => 1.35, // Critical/Error
+            3 => 1.0,     // Warning
+            _ => 0.7      // Information/other
+        });
+    }
+
+    private static double WeightedWheaCount(IEnumerable<WheaEvent> wheaEvents)
+    {
+        return wheaEvents.Sum(e =>
+        {
+            var severity = e.Severity ?? string.Empty;
+            if (severity.Contains("fatal", StringComparison.OrdinalIgnoreCase) ||
+                severity.Contains("critical", StringComparison.OrdinalIgnoreCase))
+                return 1.5;
+            if (severity.Contains("error", StringComparison.OrdinalIgnoreCase))
+                return 1.25;
+            if (severity.Contains("warning", StringComparison.OrdinalIgnoreCase))
+                return 1.0;
+            return 1.1;
+        });
+    }
 
     private List<string> BuildKeyFindings()
     {
