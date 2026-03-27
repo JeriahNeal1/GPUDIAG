@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GPUDIAG.Core/GPUDIAG.Core.csproj" />
+    <Project Path="src/GPUDIAG/GPUDIAG.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GPUDIAG.Tests/GPUDIAG.Tests.csproj" />
+  </Folder>
+</Solution>
