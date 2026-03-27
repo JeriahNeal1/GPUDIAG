@@ -1,4 +1,5 @@
 using System.Text;
+using GPUDIAG.Core.Analysis;
 using GPUDIAG.Core.Models;
 using GPUDIAG.Core.Parsers;
 
@@ -22,7 +23,7 @@ public static class HtmlReportGenerator
         sb.AppendLine(GetScripts());
         sb.AppendLine("</head><body>");
         sb.AppendLine($"<h1>GPUDIAG Diagnostic Report</h1>");
-        sb.AppendLine($"<p class='meta'>Generated: {gen} | Scan type: {report.ScanType}</p>");
+        sb.AppendLine($"<p class='meta'>Generated: {gen} | Scan type: {report.ScanType} | GPUDIAG version: {HE(report.AppVersion)}</p>");
 
         // Executive summary
         if (report.Diagnosis != null)
@@ -117,6 +118,21 @@ public static class HtmlReportGenerator
                           t.Severity == EventSeverity.Warning ? "sev-warn" : "";
                 sb.AppendLine($"<tr class='{cls}'><td>{t.Timestamp:yyyy-MM-dd HH:mm:ss}</td>" +
                     $"<td>{t.Severity}</td><td>{HE(t.Source)}</td><td>{HE(t.Summary)}</td></tr>");
+            }
+            sb.AppendLine("</table></div></section>");
+        }
+
+        // Driver/service failures
+        var serviceFailures = ServiceFailureAnalyzer.Summarize(report.Events, minimumCount: 3);
+        if (serviceFailures.Any())
+        {
+            sb.AppendLine("<section class='section collapsible'><h2>Driver / Service Failure Summary</h2><button class='toggle' type='button'>Expand</button><div class='content'>");
+            sb.AppendLine("<table><tr><th>Service</th><th>Count</th><th>First</th><th>Last</th><th>GPU Related</th></tr>");
+            foreach (var svc in serviceFailures)
+            {
+                sb.AppendLine($"<tr{(svc.IsGpuRelated ? " class='highlight'" : "")}><td>{HE(svc.ServiceName)}</td><td>{svc.Count}</td>" +
+                              $"<td>{svc.FirstOccurrenceUtc:yyyy-MM-dd HH:mm:ss}</td><td>{svc.LastOccurrenceUtc:yyyy-MM-dd HH:mm:ss}</td>" +
+                              $"<td>{(svc.IsGpuRelated ? "Yes" : "No")}</td></tr>");
             }
             sb.AppendLine("</table></div></section>");
         }

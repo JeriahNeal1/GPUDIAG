@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using GPUDIAG.Core.Analysis;
 using GPUDIAG.Core.Models;
 using GPUDIAG.Core.Parsers;
 
@@ -32,6 +33,8 @@ public static class EvidenceBundleExporter
         {
             var evtSummary = BuildEventSummary(report);
             AddText(zip, "event_log_summary.txt", evtSummary);
+            var timelineCsv = BuildTimelineCsv(report);
+            AddText(zip, "timeline.csv", timelineCsv);
         }
 
         // WHEA summary
@@ -111,5 +114,46 @@ public static class EvidenceBundleExporter
         }
 
         return sb.ToString();
+    }
+
+    private static string BuildTimelineCsv(DiagnosticReport report)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("DateTime,Provider,EventId,Severity,Category,Summary");
+        foreach (var t in report.Timeline.OrderByDescending(t => t.Timestamp).Take(1000))
+        {
+            sb.AppendLine(string.Join(",",
+                Csv(t.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")),
+                Csv(t.Source),
+                Csv(t.EventId.ToString()),
+                Csv(t.Severity.ToString()),
+                Csv(t.Category.ToString()),
+                Csv(t.Summary.Replace('\r', ' ').Replace('\n', ' ').Trim())));
+        }
+
+        var serviceFailures = ServiceFailureAnalyzer.Summarize(report.Events, minimumCount: 3);
+        if (serviceFailures.Any())
+        {
+            sb.AppendLine();
+            sb.AppendLine("Service,Count,FirstOccurrenceUtc,LastOccurrenceUtc,GpuRelated");
+            foreach (var svc in serviceFailures)
+            {
+                sb.AppendLine(string.Join(",",
+                    Csv(svc.ServiceName),
+                    Csv(svc.Count.ToString()),
+                    Csv(svc.FirstOccurrenceUtc.ToString("yyyy-MM-dd HH:mm:ss")),
+                    Csv(svc.LastOccurrenceUtc.ToString("yyyy-MM-dd HH:mm:ss")),
+                    Csv(svc.IsGpuRelated ? "Yes" : "No")));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string Csv(string value)
+    {
+        if (value.Contains('"'))
+            value = value.Replace("\"", "\"\"");
+        return $"\"{value}\"";
     }
 }

@@ -24,6 +24,7 @@ public enum HypothesisType
 {
     NvidiaGpuVram,
     PcieMotherboardPower,
+    CpuCacheSubsystem,
     RamImcCpu,
     StorageFilesystem,
     ThirdPartyDriver

@@ -74,7 +74,7 @@ public class EventLogCollector
         {
             var since = DateTime.UtcNow.AddDays(-_dayRange);
             var query = new EventLogQuery(channelPath, PathType.LogName,
-                $"*[System[TimeCreated[@SystemTime>='{since:O}'] and (Level<=3 or EventID=41 or EventID=6008 or EventID=7001 or EventID=7026 or EventID=100 or EventID=200 or EventID=4608)]]");
+                $"*[System[TimeCreated[@SystemTime>='{since:O}'] and (Level<=3 or EventID=41 or EventID=46 or EventID=100 or EventID=162 or EventID=200 or EventID=1201 or EventID=4608 or EventID=6008 or EventID=7001 or EventID=7026)]]");
 
             using var reader = new EventLogReader(query);
             EventRecord? record;
@@ -240,7 +240,8 @@ public class EventLogCollector
         var anchors = events.Where(e =>
             e.Category is EventCategory.BugCheck or EventCategory.KernelPower
                        or EventCategory.TdrDisplay or EventCategory.Whea
-                       or EventCategory.AppCrash)
+                       or EventCategory.AppCrash or EventCategory.ServiceControl
+                       or EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage)
             .OrderBy(e => e.TimeCreated)
             .ToList();
 
@@ -285,6 +286,8 @@ public class EventLogCollector
             EventCategory.KernelPower => "KERNEL-POWER",
             EventCategory.Whea => "WHEA",
             EventCategory.AppCrash => "APP-CRASH",
+            EventCategory.ServiceControl => "SERVICE",
+            EventCategory.Disk or EventCategory.Filesystem or EventCategory.Storage => "STORAGE",
             _ => e.Category.ToString().ToUpper()
         };
         return $"[{prefix}] {e.ProviderName} ID={e.EventId}: {(msg.Length > 120 ? msg[..120] + "…" : msg)}";
